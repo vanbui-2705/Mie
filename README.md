@@ -1,15 +1,22 @@
 # Comment Edit Delete
 
-Tool WinForms C# để quản lý profile `uid|token`, kiểm tra token, comment mới, chỉnh sửa comment, xóa comment và xoay proxy KiotProxy.
+Desktop WinForms tool for managing Facebook comment tasks with profiles, token checking, edit/delete/new comment actions, and KiotProxy rotation.
 
-## Yêu Cầu
+Công cụ WinForms desktop để quản lý tác vụ comment Facebook: quản lý profile, check token, chỉnh sửa/xóa/comment mới và xoay proxy KiotProxy.
+
+---
+
+## English
+
+### Requirements
 
 - Windows
 - .NET SDK 9.0
-- Token Facebook hợp lệ do người dùng sở hữu và có quyền thao tác với comment/bài viết
-- API key KiotProxy nếu muốn chạy qua proxy
+- Valid Facebook tokens owned by the user
+- Tokens must have the required permissions for the target comments/posts
+- KiotProxy API keys if proxy mode is used
 
-## Chạy Tool
+### Run
 
 ```powershell
 dotnet run
@@ -21,15 +28,210 @@ Build Debug:
 dotnet build -c Debug
 ```
 
-File chạy sau khi build:
+Executable:
 
 ```text
 bin\Debug\net9.0-windows\ToolEditDeleteCmt.exe
 ```
 
-## Tab Hồ Sơ
+### Profile Tab
 
-Nhập mỗi dòng một profile:
+Input format, one profile per line:
+
+```text
+uid|token
+```
+
+Features:
+
+- `Import .txt`: import profile list from a text file.
+- `Load profile`: load/merge profiles. Duplicate UID refreshes the token instead of adding a new row.
+- `Check token`: check token live/die/checkpoint using Graph API `/me`.
+- `Save data`: save profiles and current state.
+- `Delete checked`: delete checked profiles.
+- `Clear`: clear all loaded profiles.
+
+The profile table shows:
+
+- Index
+- UID
+- Full token
+- Token status
+- Task count
+- Last error
+
+Status colors:
+
+- `Live`: green
+- `Token out`: yellow
+- `Checkpoint` / `Die`: red
+
+Profile status is saved by UID. If a token becomes checkpointed while running, the state is preserved after reopening the app.
+
+### Interaction Tab
+
+Main inputs:
+
+- `UID profile`: leave empty for Graph auto-check, or enter UIDs manually.
+- `Comment link`: used for edit/delete.
+- `Post ID/link`: used for new comments.
+
+Each input box has a live counter for non-empty lines.
+
+Supported actions:
+
+- Edit comment
+- Delete comment
+- New comment
+
+#### Edit/Delete Comment
+
+- Enter comment links or comment IDs in `Comment link`.
+- If UID input is empty, the tool uses the first profile token to resolve comment author UID through Graph API, then maps that UID to the matching token in the Profile tab.
+- If one UID is entered, it applies to all comment links.
+- If multiple UIDs are entered, UID line count must match comment link line count.
+
+#### New Comment
+
+- `Comment link` is not required.
+- Enter post IDs or post links in `Post ID/link`.
+- If UID input is empty, all loaded profiles are used.
+- `Posts per UID` limits how many posts each UID can comment on.
+- Example: 3 profiles, 50 posts, `Posts per UID = 5` creates only 15 tasks.
+- Successful comments return links in this format:
+
+```text
+https://www.facebook.com/{postId}?comment_id={commentId}
+```
+
+#### Threads And Rounds
+
+`Thread count` controls how many tasks run in one round.
+
+Example with `Thread count = 5`:
+
+- The tool creates 5 log rows for the current round.
+- The next round starts only after those 5 rows finish.
+- If delay is enabled, it applies after each completed round.
+
+#### Text And Images
+
+- `New content`: supports multiple content blocks. Separate blocks with one blank line.
+- The tool randomly picks one content block for each task.
+- `Choose file`: select one or more image files.
+- The image list can be edited manually, one file per line.
+- When image is provided, the tool sends multipart `source` for edit/new comment requests.
+
+### Proxy Tab
+
+KiotProxy support.
+
+Inputs:
+
+- `Kiot token`: KiotProxy auth token.
+- `Proxy API key`: one API key per line.
+- `Uses per IP`: how many tasks can use each IP.
+
+Default endpoints:
+
+```text
+https://api.kiotproxy.com/api/v1/proxies/new?key={apiKey}
+https://api.kiotproxy.com/api/v1/proxies/current?key={apiKey}
+```
+
+Proxy behavior:
+
+- If proxy is not started, tasks run direct.
+- If proxy is started, tasks must wait for a Ready proxy and never fall back to local IP.
+- Ready proxies are assigned by round-robin: A -> B -> C -> A -> B -> C.
+- Each task consumes one proxy use.
+- When a proxy reaches zero uses, it changes to `Refreshing` and gets a new IP.
+- Refreshing/waiting proxies are skipped until Ready again.
+
+### Logs And Popups
+
+- One log row per task.
+- Task status updates on the same row.
+- A summary popup appears after all interaction tasks finish.
+- If the user clicks Stop, the finished popup is not shown.
+- On app exit, a confirmation popup appears. If tasks/proxy are running, it warns that current work will be stopped.
+
+### Saved Data
+
+Settings are saved here:
+
+```text
+%LOCALAPPDATA%\ToolEditDeleteCmt\settings.dpapi
+```
+
+Windows DPAPI `CurrentUser` is used to protect the settings file.
+
+Saved data includes:
+
+- Profiles `uid|token`
+- Profile status
+- UID/comment/post inputs
+- Comment content
+- Image file list
+- Proxy configuration
+- KiotProxy token/API keys
+
+### Facebook API
+
+The tool uses Facebook Graph API:
+
+- Edit comment: `POST /{commentId}`
+- Delete comment: `DELETE /{commentId}`
+- New comment: `POST /{postId}/comments`
+- Check token: `GET /me?fields=id`
+
+The tool does not bypass captcha, does not extract tokens from browsers, does not scrape, and does not bypass platform limits. Users are responsible for using valid tokens with proper permissions.
+
+### Publish
+
+```powershell
+dotnet publish -c Release -r win-x64 --self-contained true
+```
+
+Output:
+
+```text
+bin\Release\net9.0-windows\win-x64\publish
+```
+
+---
+
+## Tiếng Việt
+
+### Yêu Cầu
+
+- Windows
+- .NET SDK 9.0
+- Token Facebook hợp lệ do người dùng sở hữu
+- Token phải có quyền thao tác với comment/bài viết mục tiêu
+- API key KiotProxy nếu muốn chạy qua proxy
+
+### Chạy Tool
+
+```powershell
+dotnet run
+```
+
+Build Debug:
+
+```powershell
+dotnet build -c Debug
+```
+
+File chạy:
+
+```text
+bin\Debug\net9.0-windows\ToolEditDeleteCmt.exe
+```
+
+### Tab Hồ Sơ
+
+Định dạng nhập, mỗi dòng một profile:
 
 ```text
 uid|token
@@ -38,11 +240,11 @@ uid|token
 Chức năng:
 
 - `Nhập .txt`: nhập danh sách profile từ file text.
-- `Nạp profile`: nạp thêm profile vào bảng. Nếu trùng UID thì chỉ refresh token của UID đó.
+- `Nạp profile`: nạp/merge profile. UID trùng thì refresh token, không thêm dòng mới.
 - `Check token`: kiểm tra token live/die/checkpoint bằng Graph API `/me`.
 - `Lưu dữ liệu`: lưu profile và trạng thái hiện tại.
 - `Xóa đã tích`: xóa các profile được tick.
-- `Xóa trắng`: xóa toàn bộ profile đang nạp.
+- `Xóa trắng`: xóa toàn bộ profile đã nạp.
 
 Bảng profile hiển thị:
 
@@ -57,72 +259,72 @@ Màu trạng thái:
 
 - `Live`: xanh
 - `Token out`: vàng
-- `Checkpoint` hoặc `Die`: đỏ
+- `Checkpoint` / `Die`: đỏ
 
-Trạng thái profile được lưu lại theo UID. Nếu token bị checkpoint khi đang chạy, mở lại tool vẫn giữ trạng thái đó.
+Trạng thái profile được lưu theo UID. Nếu token bị checkpoint trong lúc chạy, mở lại tool vẫn giữ trạng thái đó.
 
-## Tab Tương Tác
+### Tab Tương Tác
 
 Các ô nhập chính:
 
-- `UID profile`: để trống để tool tự lấy UID comment bằng Graph, hoặc nhập UID thủ công.
+- `UID profile`: để trống để tool tự check bằng Graph, hoặc nhập UID thủ công.
 - `Link comment`: dùng cho chỉnh sửa/xóa comment.
 - `ID/link bài viết`: dùng cho comment mới.
 
-Mỗi ô có bộ đếm số dòng không rỗng để dễ kiểm tra dữ liệu đầu vào.
+Mỗi ô có bộ đếm số dòng không rỗng.
 
 Hành động hỗ trợ:
 
-- `Chỉnh sửa comment`
-- `Xóa comment`
-- `Comment mới`
+- Chỉnh sửa comment
+- Xóa comment
+- Comment mới
 
-### Chỉnh Sửa/Xóa Comment
+#### Chỉnh Sửa/Xóa Comment
 
 - Nhập link comment hoặc comment ID vào ô `Link comment`.
-- Nếu ô UID trống, tool dùng token đầu tiên để check UID tác giả comment bằng Graph API rồi gán đúng token theo UID trong tab Hồ sơ.
+- Nếu ô UID trống, tool dùng token đầu tiên để lấy UID tác giả comment bằng Graph API, sau đó tìm token khớp UID trong tab Hồ sơ.
 - Nếu nhập 1 UID, UID đó áp dụng cho toàn bộ link.
 - Nếu nhập nhiều UID, số dòng UID phải bằng số dòng link.
 
-### Comment Mới
+#### Comment Mới
 
 - Không cần nhập `Link comment`.
 - Nhập danh sách post ID hoặc link post vào ô `ID/link bài viết`.
 - Nếu UID trống, tool dùng toàn bộ profile đang nạp.
 - `Mỗi UID cmt`: giới hạn mỗi UID comment bao nhiêu post.
-- Ví dụ có 3 profile, 50 post, nhập `Mỗi UID cmt = 5` thì tool chỉ tạo 15 task rồi dừng.
+- Ví dụ có 3 profile, 50 post, nhập `Mỗi UID cmt = 5` thì chỉ tạo 15 task.
 - Comment thành công trả link dạng:
 
 ```text
 https://www.facebook.com/{postId}?comment_id={commentId}
 ```
 
-### Số Luồng Và Vòng Chạy
+#### Số Luồng Và Vòng Chạy
 
 `Số luồng` quyết định số task chạy trong một vòng.
 
 Ví dụ `Số luồng = 5`:
 
 - Tool tạo 5 dòng log cho vòng hiện tại.
-- Chạy xong 5 dòng đó mới qua vòng tiếp theo.
-- Nếu có delay sau mỗi vòng, delay được áp dụng sau khi vòng hoàn tất.
+- Chạy xong 5 dòng đó mới sang vòng tiếp theo.
+- Nếu bật delay, delay được áp dụng sau mỗi vòng hoàn tất.
 
-### Nội Dung Và Ảnh
+#### Nội Dung Và Ảnh
 
 - `Nội dung mới`: có thể nhập nhiều nội dung. Mỗi block cách nhau bằng một dòng trống.
 - Tool chọn ngẫu nhiên một nội dung cho mỗi task.
 - `Chọn file`: chọn một hoặc nhiều file ảnh.
 - Có thể sửa tay danh sách file ảnh, mỗi file một dòng.
-- Khi edit/comment có ảnh, tool gửi ảnh dạng multipart `source`.
+- Khi có ảnh, tool gửi multipart `source` cho request edit/comment mới.
 
-## Tab Proxy
+### Tab Proxy
 
 Hỗ trợ KiotProxy.
 
 Nhập:
 
 - `Token Kiot`: auth token KiotProxy.
-- `API key proxy`: mỗi dòng một API key get IP.
+- `API key proxy`: mỗi dòng một API key.
 - `Lượt mỗi IP`: số task được dùng trên mỗi IP.
 
 Endpoint mặc định:
@@ -136,20 +338,20 @@ Logic proxy:
 
 - Nếu không bật proxy, task chạy direct.
 - Nếu đã bật proxy, task bắt buộc chờ proxy Ready, không tự fallback về IP máy.
-- Proxy được cấp theo round-robin: A -> B -> C -> A -> B -> C.
-- Mỗi task dùng một lượt proxy.
+- Proxy được cấp theo vòng tròn: A -> B -> C -> A -> B -> C.
+- Mỗi task trừ một lượt proxy.
 - Hết lượt thì proxy chuyển `Refreshing` và tự get IP mới.
-- Proxy đang refresh/waiting sẽ bị bỏ qua khỏi vòng xoay cho đến khi Ready lại.
+- Proxy đang refresh/waiting sẽ bị bỏ qua cho đến khi Ready lại.
 
-## Log Và Popup
+### Log Và Popup
 
-- Log chỉ có một dòng cho mỗi task.
-- Trạng thái task được cập nhật trên đúng dòng đó.
-- Chạy xong tự hiện popup tổng kết.
-- Nếu người dùng bấm `Dừng`, tool không hiện popup hoàn tất.
-- Khi thoát app, tool hiện popup xác nhận. Nếu task/proxy đang chạy, popup sẽ báo rõ là thoát sẽ dừng tác vụ hiện tại.
+- Mỗi task có một dòng log.
+- Trạng thái task cập nhật trên đúng dòng đó.
+- Chạy xong hiện popup tổng kết.
+- Nếu người dùng bấm Dừng, popup hoàn tất không hiện.
+- Khi thoát app sẽ có popup xác nhận. Nếu task/proxy đang chạy, popup báo rõ thoát sẽ dừng tác vụ hiện tại.
 
-## Lưu Dữ Liệu
+### Lưu Dữ Liệu
 
 Dữ liệu được lưu tại:
 
@@ -157,7 +359,7 @@ Dữ liệu được lưu tại:
 %LOCALAPPDATA%\ToolEditDeleteCmt\settings.dpapi
 ```
 
-Tool dùng Windows DPAPI theo user hiện tại để bảo vệ file cấu hình.
+Tool dùng Windows DPAPI `CurrentUser` để bảo vệ file cấu hình.
 
 Dữ liệu được lưu:
 
@@ -165,11 +367,11 @@ Dữ liệu được lưu:
 - Trạng thái profile
 - UID/link/post input
 - Nội dung comment
-- File ảnh
+- Danh sách file ảnh
 - Cấu hình proxy
 - Token/API key KiotProxy
 
-## API Facebook
+### API Facebook
 
 Tool dùng Facebook Graph API:
 
@@ -178,23 +380,15 @@ Tool dùng Facebook Graph API:
 - Comment mới: `POST /{postId}/comments`
 - Check token: `GET /me?fields=id`
 
-Tool không bypass captcha, không lấy token từ trình duyệt, không scraping và không vượt giới hạn nền tảng. Người dùng chịu trách nhiệm sử dụng token hợp lệ và có quyền thao tác với comment/bài viết.
+Tool không bypass captcha, không lấy token từ trình duyệt, không scraping và không vượt giới hạn nền tảng. Người dùng chịu trách nhiệm sử dụng token hợp lệ và có quyền phù hợp.
 
-## Build/Publish Gợi Ý
-
-Build Debug:
-
-```powershell
-dotnet build -c Debug
-```
-
-Publish self-contained Windows x64:
+### Publish
 
 ```powershell
 dotnet publish -c Release -r win-x64 --self-contained true
 ```
 
-Output publish nằm trong:
+Output:
 
 ```text
 bin\Release\net9.0-windows\win-x64\publish

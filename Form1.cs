@@ -40,6 +40,9 @@ public partial class Form1 : Form
     private NumericUpDown _delayEveryRoundsInput = null!;
     private NumericUpDown _postsPerUidInput = null!;
     private TextBox _editTextBox = null!;
+    private Button _toggleContentButton = null!;
+    private RowStyle _contentRowStyle = null!;
+    private bool _contentInputVisible = true;
     private TextBox _imageFolderTextBox = null!;
     private Label _statsLabel = null!;
     private DataGridView _logGrid = null!;
@@ -409,6 +412,7 @@ public partial class Form1 : Form
         options.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         options.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         options.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        _contentRowStyle = options.RowStyles[1];
 
         options.Controls.Add(CreateLabel("Hành động:"), 0, 0);
         _actionCombo = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -433,8 +437,11 @@ public partial class Form1 : Form
             PlaceholderText = "Nhập 1 hoặc nhiều nội dung. Mỗi block cách nhau bằng 1 dòng trống."
         };
         StyleTextBox(_editTextBox);
-        options.SetColumnSpan(_editTextBox, 5);
+        options.SetColumnSpan(_editTextBox, 4);
         options.Controls.Add(_editTextBox, 1, 1);
+        _toggleContentButton = CreateButton("Ẩn", dock: DockStyle.Fill);
+        _toggleContentButton.Click += (_, _) => ToggleContentInput();
+        options.Controls.Add(_toggleContentButton, 5, 1);
 
         options.Controls.Add(CreateLabel("File ảnh:"), 0, 2);
         _imageFolderTextBox = new TextBox
@@ -769,6 +776,14 @@ public partial class Form1 : Form
                 MessageBoxButtons.OK,
                 imageCount > 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
         }
+    }
+
+    private void ToggleContentInput()
+    {
+        _contentInputVisible = !_contentInputVisible;
+        _editTextBox.Visible = _contentInputVisible;
+        _contentRowStyle.Height = _contentInputVisible ? 88 : 36;
+        _toggleContentButton.Text = _contentInputVisible ? "Ẩn" : "Hiện";
     }
 
     private async Task CheckTokensAsync()
