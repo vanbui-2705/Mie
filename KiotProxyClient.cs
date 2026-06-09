@@ -1,5 +1,6 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ToolEditDeleteCmt;
 
@@ -50,7 +51,7 @@ public sealed class KiotProxyClient
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            throw new InvalidOperationException($"KiotProxy HTTP {(int)response.StatusCode}: {TrimMessage(body)}");
+            throw new InvalidOperationException(NormalizeErrorMessage(body, (int)response.StatusCode));
         }
 
         return ParseProxyResponse(body);
@@ -63,7 +64,7 @@ public sealed class KiotProxyClient
         if (root.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.False)
         {
             var message = TryGetString(root, "message") ?? "KiotProxy tra ve success=false";
-            throw new InvalidOperationException(message);
+            throw new InvalidOperationException(NormalizeErrorMessage(root, message));
         }
 
         var data = root.TryGetProperty("data", out var dataElement) ? dataElement : root;
@@ -155,5 +156,70 @@ public sealed class KiotProxyClient
     {
         value = value.Replace("\r", " ").Replace("\n", " ").Trim();
         return value.Length > 180 ? value[..180] : value;
+    }
+
+    private static string NormalizeErrorMessage(string body, int? httpStatusCode = null)
+    {
+        var cleanBody = TrimMessage(body);
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            var root = document.RootElement;
+            var message = TryGetString(root, "message") ?? cleanBody;
+            var normalized = NormalizeErrorMessage(root, message);
+            if (IsRetryDelayMessage(normalized))
+            {
+                return normalized;
+            }
+
+            return httpStatusCode is null
+                ? normalized
+                : $"KiotProxy HTTP {httpStatusCode}: {normalized}";
+        }
+        catch (JsonException)
+        {
+            var retryDelay = TryFormatRetryDelay(cleanBody);
+            if (retryDelay is not null)
+            {
+                return retryDelay;
+            }
+
+            return httpStatusCode is null
+                ? cleanBody
+                : $"KiotProxy HTTP {httpStatusCode}: {cleanBody}";
+        }
+    }
+
+    private static string NormalizeErrorMessage(JsonElement root, string message)
+    {
+        var retryAfter = TryGetInt(root, "retryAfter");
+        retryAfter = retryAfter > 0 ? retryAfter : TryGetInt(root, "retry_after");
+        if (retryAfter > 0)
+        {
+            return $"Gửi lại sau {retryAfter}s";
+        }
+
+        var retryDelay = TryFormatRetryDelay(message);
+        if (retryDelay is not null)
+        {
+            return retryDelay;
+        }
+
+        return TrimMessage(message);
+    }
+
+    private static string? TryFormatRetryDelay(string value)
+    {
+        var match = Regex.Match(
+            value,
+            @"(?:Gửi lại sau|Gui lai sau|retry after|try again in)\s*(\d+)\s*(?:giây|giay|s|sec|secs|second|seconds)?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success ? $"Gửi lại sau {match.Groups[1].Value}s" : null;
+    }
+
+    private static bool IsRetryDelayMessage(string value)
+    {
+        return value.StartsWith("Gửi lại sau ", StringComparison.OrdinalIgnoreCase) &&
+               value.EndsWith("s", StringComparison.OrdinalIgnoreCase);
     }
 }

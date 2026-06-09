@@ -2,12 +2,14 @@ namespace ToolEditDeleteCmt;
 
 public partial class Form1 : Form
 {
-    private static readonly Color AppBackColor = Color.FromArgb(236, 254, 255);
+    private static readonly Color AppBackColor = Color.FromArgb(225, 245, 249);
     private static readonly Color PanelBackColor = Color.White;
-    private static readonly Color BorderColor = Color.FromArgb(165, 243, 252);
-    private static readonly Color PrimaryColor = Color.FromArgb(6, 182, 212);
-    private static readonly Color PrimaryDarkColor = Color.FromArgb(8, 145, 178);
-    private static readonly Color PrimarySoftColor = Color.FromArgb(207, 250, 254);
+    private static readonly Color BorderColor = Color.FromArgb(135, 211, 225);
+    private static readonly Color PrimaryColor = Color.FromArgb(0, 174, 239);
+    private static readonly Color PrimaryDarkColor = Color.FromArgb(0, 133, 190);
+    private static readonly Color PrimarySoftColor = Color.FromArgb(196, 240, 248);
+    private static readonly Color TabBackColor = Color.FromArgb(246, 246, 246);
+    private static readonly Color TabSelectedColor = AppBackColor;
     private static readonly Color SuccessColor = Color.FromArgb(22, 163, 74);
     private static readonly Color WarningColor = Color.FromArgb(217, 119, 6);
     private static readonly Color DangerColor = Color.FromArgb(220, 38, 38);
@@ -23,17 +25,24 @@ public partial class Form1 : Form
     private readonly Dictionary<string, DataGridViewRow> _logRowsByKey = new(StringComparer.OrdinalIgnoreCase);
     private AppSettings _settings;
     private bool _tasksStoppedByUser;
+    private LogSortMode _logSortMode = LogSortMode.IndexAscending;
 
     private TextBox _profileTextBox = null!;
     private DataGridView _profileGrid = null!;
     private Button _checkTokensButton = null!;
-    private TextBox _uidsTextBox = null!;
-    private TextBox _linksTextBox = null!;
-    private TextBox _postIdTextBox = null!;
-    private Label _uidCountLabel = null!;
-    private Label _linkCountLabel = null!;
-    private Label _postCountLabel = null!;
-    private ComboBox _actionCombo = null!;
+    private TabControl _interactionActionTabs = null!;
+    private TextBox _editUidTextBox = null!;
+    private TextBox _editLinksTextBox = null!;
+    private TextBox _deleteUidTextBox = null!;
+    private TextBox _deleteLinksTextBox = null!;
+    private TextBox _commentUidTextBox = null!;
+    private TextBox _commentPostIdTextBox = null!;
+    private Label _editUidCountLabel = null!;
+    private Label _editLinkCountLabel = null!;
+    private Label _deleteUidCountLabel = null!;
+    private Label _deleteLinkCountLabel = null!;
+    private Label _commentUidCountLabel = null!;
+    private Label _commentPostCountLabel = null!;
     private NumericUpDown _threadsInput = null!;
     private NumericUpDown _delayMinInput = null!;
     private NumericUpDown _delayMaxInput = null!;
@@ -56,6 +65,13 @@ public partial class Form1 : Form
     private TextBox _getCurrentProxyUrlTextBox = null!;
     private NumericUpDown _usesPerProxyInput = null!;
     private DataGridView _proxyGrid = null!;
+
+    private enum LogSortMode
+    {
+        IndexAscending,
+        IndexDescending,
+        StatusSuccessFirst
+    }
 
     public Form1()
     {
@@ -88,6 +104,7 @@ public partial class Form1 : Form
             Font = UiFontBold,
             Padding = new Point(14, 5)
         };
+        StyleTabControl(tabs);
         tabs.TabPages.Add(BuildProfileTab());
         tabs.TabPages.Add(BuildInteractionTab());
         tabs.TabPages.Add(BuildProxyTab());
@@ -117,8 +134,35 @@ public partial class Form1 : Form
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = TextColor,
-            BackColor = AppBackColor,
+            BackColor = Color.Transparent,
             Font = UiFontBold
+        };
+    }
+
+    private static void StyleTabControl(TabControl tabControl)
+    {
+        tabControl.DrawMode = TabDrawMode.OwnerDrawFixed;
+        tabControl.SizeMode = TabSizeMode.Normal;
+        tabControl.DrawItem += (_, e) =>
+        {
+            var selected = e.Index == tabControl.SelectedIndex;
+            var tabPage = tabControl.TabPages[e.Index];
+            var bounds = e.Bounds;
+            var fill = selected ? TabSelectedColor : TabBackColor;
+            var textColor = selected ? PrimaryDarkColor : TextColor;
+
+            using var backBrush = new SolidBrush(fill);
+            using var borderPen = new Pen(BorderColor);
+            e.Graphics.FillRectangle(backBrush, bounds);
+            e.Graphics.DrawRectangle(borderPen, bounds.X, bounds.Y, bounds.Width - 1, bounds.Height - 1);
+
+            TextRenderer.DrawText(
+                e.Graphics,
+                tabPage.Text,
+                tabControl.Font,
+                bounds,
+                textColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         };
     }
 
@@ -127,7 +171,7 @@ public partial class Form1 : Form
         var panel = new Panel
         {
             Dock = DockStyle.Fill,
-            BackColor = AppBackColor,
+            BackColor = Color.Transparent,
             Margin = new Padding(0, 0, 8, 0)
         };
         var title = CreateLabel(text);
@@ -147,7 +191,7 @@ public partial class Form1 : Form
             Text = "0",
             TextAlign = ContentAlignment.MiddleRight,
             ForeColor = PrimaryDarkColor,
-            BackColor = PrimarySoftColor,
+            BackColor = Color.Transparent,
             Font = UiFontBold,
             Padding = new Padding(8, 2, 8, 2),
             Margin = new Padding(0)
@@ -344,61 +388,17 @@ public partial class Form1 : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var inputGrid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, BackColor = AppBackColor };
-        inputGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 26));
-        inputGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 54));
-        inputGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
-        inputGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        inputGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        _uidCountLabel = CreateCountLabel();
-        _linkCountLabel = CreateCountLabel();
-        _postCountLabel = CreateCountLabel();
-        inputGrid.Controls.Add(CreateHeaderWithCount("UID profile (để trống = tự check bằng Graph):", _uidCountLabel), 0, 0);
-        inputGrid.Controls.Add(CreateHeaderWithCount("Link comment:", _linkCountLabel), 1, 0);
-        inputGrid.Controls.Add(CreateHeaderWithCount("ID/link bài viết:", _postCountLabel), 2, 0);
-
-        _uidsTextBox = new TextBox
+        _interactionActionTabs = new TabControl
         {
             Dock = DockStyle.Fill,
-            Multiline = true,
-            MaxLength = 0,
-            ScrollBars = ScrollBars.Both,
-            WordWrap = false,
-            Font = MonoFont,
-            PlaceholderText = "Nhập 1 UID áp dụng tất cả, hoặc mỗi dòng 1 UID tương ứng link"
+            Font = UiFontBold,
+            Padding = new Point(12, 4)
         };
-        StyleTextBox(_uidsTextBox);
-        _uidsTextBox.TextChanged += (_, _) => UpdateInteractionCounts();
-        inputGrid.Controls.Add(_uidsTextBox, 0, 1);
-
-        _linksTextBox = new TextBox
-        {
-            Dock = DockStyle.Fill,
-            Multiline = true,
-            MaxLength = 0,
-            ScrollBars = ScrollBars.Both,
-            WordWrap = false,
-            Font = MonoFont,
-            PlaceholderText = "Mỗi dòng 1 link comment hoặc comment_id"
-        };
-        StyleTextBox(_linksTextBox);
-        _linksTextBox.TextChanged += (_, _) => UpdateInteractionCounts();
-        inputGrid.Controls.Add(_linksTextBox, 1, 1);
-
-        _postIdTextBox = new TextBox
-        {
-            Dock = DockStyle.Fill,
-            Multiline = true,
-            MaxLength = 0,
-            ScrollBars = ScrollBars.Both,
-            WordWrap = false,
-            Font = MonoFont,
-            PlaceholderText = "Dùng khi Comment mới"
-        };
-        StyleTextBox(_postIdTextBox);
-        _postIdTextBox.TextChanged += (_, _) => UpdateInteractionCounts();
-        inputGrid.Controls.Add(_postIdTextBox, 2, 1);
-        root.Controls.Add(inputGrid, 0, 0);
+        StyleTabControl(_interactionActionTabs);
+        _interactionActionTabs.TabPages.Add(BuildEditActionTab());
+        _interactionActionTabs.TabPages.Add(BuildDeleteActionTab());
+        _interactionActionTabs.TabPages.Add(BuildNewCommentActionTab());
+        root.Controls.Add(_interactionActionTabs, 0, 0);
 
         var options = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 6, RowCount = 5, BackColor = AppBackColor };
         options.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
@@ -414,17 +414,10 @@ public partial class Form1 : Form
         options.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         _contentRowStyle = options.RowStyles[1];
 
-        options.Controls.Add(CreateLabel("Hành động:"), 0, 0);
-        _actionCombo = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
-        _actionCombo.Items.AddRange(["Chỉnh sửa comment", "Xóa comment", "Comment mới"]);
-        _actionCombo.SelectedIndex = 0;
-        StyleComboBox(_actionCombo);
-        options.Controls.Add(_actionCombo, 1, 0);
-
-        options.Controls.Add(CreateLabel("Số luồng:"), 2, 0);
+        options.Controls.Add(CreateLabel("Số luồng:"), 0, 0);
         _threadsInput = new NumericUpDown { Dock = DockStyle.Left, Minimum = 1, Maximum = 200, Value = 5, Width = 100 };
         StyleNumeric(_threadsInput);
-        options.Controls.Add(_threadsInput, 3, 0);
+        options.Controls.Add(_threadsInput, 1, 0);
 
         options.Controls.Add(CreateLabel("Nội dung mới:"), 0, 1);
         _editTextBox = new TextBox
@@ -512,10 +505,110 @@ public partial class Form1 : Form
         _logGrid.Columns.Add("Status", "Trạng thái");
         _logGrid.Columns.Add("Error", "Lỗi");
         SetColumnWidths(_logGrid, 55, 160, 760, 90, 180, 120, 560);
+        foreach (DataGridViewColumn column in _logGrid.Columns)
+        {
+            column.SortMode = column.Name is "Index" or "Status"
+                ? DataGridViewColumnSortMode.Programmatic
+                : DataGridViewColumnSortMode.NotSortable;
+        }
+
+        _logGrid.ColumnHeaderMouseClick += LogGridColumnHeaderMouseClick;
+        UpdateLogSortGlyphs();
         root.Controls.Add(_logGrid, 0, 3);
 
         tab.Controls.Add(root);
         return tab;
+    }
+
+    private TabPage BuildEditActionTab()
+    {
+        return BuildTwoInputActionTab(
+            "Chỉnh sửa",
+            "Link comment:",
+            "Mỗi dòng 1 link comment hoặc comment_id",
+            out _editUidTextBox,
+            out _editLinksTextBox,
+            out _editUidCountLabel,
+            out _editLinkCountLabel);
+    }
+
+    private TabPage BuildDeleteActionTab()
+    {
+        return BuildTwoInputActionTab(
+            "Xóa",
+            "Link comment:",
+            "Mỗi dòng 1 link comment hoặc comment_id",
+            out _deleteUidTextBox,
+            out _deleteLinksTextBox,
+            out _deleteUidCountLabel,
+            out _deleteLinkCountLabel);
+    }
+
+    private TabPage BuildNewCommentActionTab()
+    {
+        return BuildTwoInputActionTab(
+            "Comment mới",
+            "ID/link bài viết:",
+            "Mỗi dòng 1 ID/link bài viết",
+            out _commentUidTextBox,
+            out _commentPostIdTextBox,
+            out _commentUidCountLabel,
+            out _commentPostCountLabel);
+    }
+
+    private TabPage BuildTwoInputActionTab(
+        string title,
+        string targetTitle,
+        string targetPlaceholder,
+        out TextBox uidTextBox,
+        out TextBox targetTextBox,
+        out Label uidCountLabel,
+        out Label targetCountLabel)
+    {
+        var tab = new TabPage(title) { BackColor = AppBackColor };
+        var inputGrid = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 2,
+            BackColor = AppBackColor,
+            Padding = new Padding(8)
+        };
+        inputGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 28));
+        inputGrid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 72));
+        inputGrid.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        inputGrid.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        uidCountLabel = CreateCountLabel();
+        targetCountLabel = CreateCountLabel();
+        inputGrid.Controls.Add(CreateHeaderWithCount("UID profile (để trống = tự check bằng Graph):", uidCountLabel), 0, 0);
+        inputGrid.Controls.Add(CreateHeaderWithCount(targetTitle, targetCountLabel), 1, 0);
+
+        uidTextBox = CreateMultilineInput("Nhập 1 UID áp dụng tất cả, hoặc mỗi dòng 1 UID tương ứng link/post");
+        targetTextBox = CreateMultilineInput(targetPlaceholder);
+        uidTextBox.TextChanged += (_, _) => UpdateInteractionCounts();
+        targetTextBox.TextChanged += (_, _) => UpdateInteractionCounts();
+        inputGrid.Controls.Add(uidTextBox, 0, 1);
+        inputGrid.Controls.Add(targetTextBox, 1, 1);
+
+        tab.Controls.Add(inputGrid);
+        return tab;
+    }
+
+    private static TextBox CreateMultilineInput(string placeholder)
+    {
+        var textBox = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Multiline = true,
+            MaxLength = 0,
+            ScrollBars = ScrollBars.Both,
+            WordWrap = false,
+            Font = MonoFont,
+            PlaceholderText = placeholder
+        };
+        StyleTextBox(textBox);
+        return textBox;
     }
 
     private TabPage BuildProxyTab()
@@ -668,10 +761,26 @@ public partial class Form1 : Form
             RefreshProfileGrid();
         }
 
-        _uidsTextBox.Text = _settings.InteractionUidText;
-        _linksTextBox.Text = _settings.InteractionLinkText;
-        _postIdTextBox.Text = _settings.InteractionPostIdText;
-        _actionCombo.SelectedIndex = Math.Clamp(_settings.InteractionActionIndex, 0, Math.Max(0, _actionCombo.Items.Count - 1));
+        var legacyActionIndex = Math.Clamp(_settings.InteractionActionIndex, 0, 2);
+        _editUidTextBox.Text = !string.IsNullOrWhiteSpace(_settings.EditUidText)
+            ? _settings.EditUidText
+            : legacyActionIndex == 0 ? _settings.InteractionUidText : "";
+        _editLinksTextBox.Text = !string.IsNullOrWhiteSpace(_settings.EditLinkText)
+            ? _settings.EditLinkText
+            : legacyActionIndex == 0 ? _settings.InteractionLinkText : "";
+        _deleteUidTextBox.Text = !string.IsNullOrWhiteSpace(_settings.DeleteUidText)
+            ? _settings.DeleteUidText
+            : legacyActionIndex == 1 ? _settings.InteractionUidText : "";
+        _deleteLinksTextBox.Text = !string.IsNullOrWhiteSpace(_settings.DeleteLinkText)
+            ? _settings.DeleteLinkText
+            : legacyActionIndex == 1 ? _settings.InteractionLinkText : "";
+        _commentUidTextBox.Text = !string.IsNullOrWhiteSpace(_settings.NewCommentUidText)
+            ? _settings.NewCommentUidText
+            : legacyActionIndex == 2 ? _settings.InteractionUidText : "";
+        _commentPostIdTextBox.Text = !string.IsNullOrWhiteSpace(_settings.NewCommentPostText)
+            ? _settings.NewCommentPostText
+            : _settings.InteractionPostIdText;
+        _interactionActionTabs.SelectedIndex = legacyActionIndex;
         _threadsInput.Value = Math.Clamp(_settings.InteractionThreads, (int)_threadsInput.Minimum, (int)_threadsInput.Maximum);
         _delayMinInput.Value = Math.Clamp(_settings.InteractionDelayMinSeconds, (int)_delayMinInput.Minimum, (int)_delayMinInput.Maximum);
         _delayMaxInput.Value = Math.Clamp(_settings.InteractionDelayMaxSeconds, (int)_delayMaxInput.Minimum, (int)_delayMaxInput.Maximum);
@@ -693,10 +802,16 @@ public partial class Form1 : Form
         {
             ProfileText = _profileTextBox.Text,
             ProfileStates = _profileManager.ExportStates(),
-            InteractionUidText = _uidsTextBox.Text,
-            InteractionLinkText = _linksTextBox.Text,
-            InteractionPostIdText = _postIdTextBox.Text,
-            InteractionActionIndex = _actionCombo.SelectedIndex,
+            InteractionUidText = GetCurrentUidTextBox().Text,
+            InteractionLinkText = GetCurrentAction() is CommentActionKind.Edit or CommentActionKind.Delete ? GetCurrentTargetTextBox().Text : "",
+            InteractionPostIdText = GetCurrentAction() == CommentActionKind.NewComment ? _commentPostIdTextBox.Text : "",
+            InteractionActionIndex = _interactionActionTabs.SelectedIndex,
+            EditUidText = _editUidTextBox.Text,
+            EditLinkText = _editLinksTextBox.Text,
+            DeleteUidText = _deleteUidTextBox.Text,
+            DeleteLinkText = _deleteLinksTextBox.Text,
+            NewCommentUidText = _commentUidTextBox.Text,
+            NewCommentPostText = _commentPostIdTextBox.Text,
             InteractionThreads = (int)_threadsInput.Value,
             InteractionDelayMinSeconds = (int)_delayMinInput.Value,
             InteractionDelayMaxSeconds = (int)_delayMaxInput.Value,
@@ -948,13 +1063,8 @@ public partial class Form1 : Form
             return;
         }
 
-        var uids = ReadNonEmptyLines(_uidsTextBox.Text);
-        var action = _actionCombo.SelectedIndex switch
-        {
-            1 => CommentActionKind.Delete,
-            2 => CommentActionKind.NewComment,
-            _ => CommentActionKind.Edit
-        };
+        var action = GetCurrentAction();
+        var uids = ReadNonEmptyLines(GetCurrentUidTextBox().Text);
 
         if (action is CommentActionKind.Edit or CommentActionKind.NewComment && string.IsNullOrWhiteSpace(_editTextBox.Text))
         {
@@ -979,7 +1089,7 @@ public partial class Form1 : Form
         List<CommentTaskInput> tasks;
         if (action == CommentActionKind.NewComment)
         {
-            var posts = ReadNonEmptyLines(_postIdTextBox.Text)
+            var posts = ReadNonEmptyLines(_commentPostIdTextBox.Text)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             if (posts.Count == 0)
@@ -1007,7 +1117,7 @@ public partial class Form1 : Form
         }
         else
         {
-            var links = ReadNonEmptyLines(_linksTextBox.Text);
+            var links = ReadNonEmptyLines(GetCurrentTargetTextBox().Text);
             if (links.Count == 0)
             {
                 MessageBox.Show("Chưa nhập link comment.", "Tương tác", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -1031,6 +1141,8 @@ public partial class Form1 : Form
 
         _logGrid.Rows.Clear();
         _logRowsByKey.Clear();
+        _logSortMode = LogSortMode.IndexAscending;
+        UpdateLogSortGlyphs();
         _tasksStoppedByUser = false;
         SetButtonRunning(_startTasksButton, true);
         _stopTasksButton.Enabled = true;
@@ -1073,14 +1185,52 @@ public partial class Form1 : Form
 
     private void UpdateInteractionCounts()
     {
-        if (_uidCountLabel is null || _linkCountLabel is null || _postCountLabel is null)
+        if (_editUidCountLabel is null ||
+            _editLinkCountLabel is null ||
+            _deleteUidCountLabel is null ||
+            _deleteLinkCountLabel is null ||
+            _commentUidCountLabel is null ||
+            _commentPostCountLabel is null)
         {
             return;
         }
 
-        _uidCountLabel.Text = CountNonEmptyLines(_uidsTextBox.Text).ToString();
-        _linkCountLabel.Text = CountNonEmptyLines(_linksTextBox.Text).ToString();
-        _postCountLabel.Text = CountNonEmptyLines(_postIdTextBox.Text).ToString();
+        _editUidCountLabel.Text = CountNonEmptyLines(_editUidTextBox.Text).ToString();
+        _editLinkCountLabel.Text = CountNonEmptyLines(_editLinksTextBox.Text).ToString();
+        _deleteUidCountLabel.Text = CountNonEmptyLines(_deleteUidTextBox.Text).ToString();
+        _deleteLinkCountLabel.Text = CountNonEmptyLines(_deleteLinksTextBox.Text).ToString();
+        _commentUidCountLabel.Text = CountNonEmptyLines(_commentUidTextBox.Text).ToString();
+        _commentPostCountLabel.Text = CountNonEmptyLines(_commentPostIdTextBox.Text).ToString();
+    }
+
+    private CommentActionKind GetCurrentAction()
+    {
+        return _interactionActionTabs.SelectedIndex switch
+        {
+            1 => CommentActionKind.Delete,
+            2 => CommentActionKind.NewComment,
+            _ => CommentActionKind.Edit
+        };
+    }
+
+    private TextBox GetCurrentUidTextBox()
+    {
+        return GetCurrentAction() switch
+        {
+            CommentActionKind.Delete => _deleteUidTextBox,
+            CommentActionKind.NewComment => _commentUidTextBox,
+            _ => _editUidTextBox
+        };
+    }
+
+    private TextBox GetCurrentTargetTextBox()
+    {
+        return GetCurrentAction() switch
+        {
+            CommentActionKind.Delete => _deleteLinksTextBox,
+            CommentActionKind.NewComment => _commentPostIdTextBox,
+            _ => _editLinksTextBox
+        };
     }
 
     private static int CountNonEmptyLines(string text)
@@ -1321,10 +1471,129 @@ public partial class Form1 : Form
         }
 
         ApplyLogRowStyle(row);
+        ApplyCurrentLogSort();
+    }
 
-        if (_logGrid.Rows.Count > 0)
+    private void LogGridColumnHeaderMouseClick(object? sender, DataGridViewCellMouseEventArgs e)
+    {
+        if (e.ColumnIndex < 0)
         {
-            _logGrid.FirstDisplayedScrollingRowIndex = Math.Max(0, row.Index);
+            return;
+        }
+
+        var columnName = _logGrid.Columns[e.ColumnIndex].Name;
+        if (columnName == "Index")
+        {
+            _logSortMode = _logSortMode == LogSortMode.IndexDescending
+                ? LogSortMode.IndexAscending
+                : LogSortMode.IndexDescending;
+        }
+        else if (columnName == "Status")
+        {
+            _logSortMode = LogSortMode.StatusSuccessFirst;
+        }
+        else
+        {
+            return;
+        }
+
+        ApplyCurrentLogSort();
+        UpdateLogSortGlyphs();
+    }
+
+    private void ApplyCurrentLogSort()
+    {
+        if (_logGrid.Rows.Count <= 1)
+        {
+            return;
+        }
+
+        _logGrid.SuspendLayout();
+        try
+        {
+            _logGrid.Sort(new LogRowComparer(_logSortMode));
+        }
+        finally
+        {
+            _logGrid.ResumeLayout();
+        }
+    }
+
+    private void UpdateLogSortGlyphs()
+    {
+        if (_logGrid.Columns.Count == 0)
+        {
+            return;
+        }
+
+        foreach (DataGridViewColumn column in _logGrid.Columns)
+        {
+            column.HeaderCell.SortGlyphDirection = SortOrder.None;
+        }
+
+        if (_logSortMode == LogSortMode.IndexAscending)
+        {
+            if (_logGrid.Columns["Index"] is { } indexColumn)
+            {
+                indexColumn.HeaderCell.SortGlyphDirection = SortOrder.Ascending;
+            }
+        }
+        else if (_logSortMode == LogSortMode.IndexDescending)
+        {
+            if (_logGrid.Columns["Index"] is { } indexColumn)
+            {
+                indexColumn.HeaderCell.SortGlyphDirection = SortOrder.Descending;
+            }
+        }
+        else
+        {
+            if (_logGrid.Columns["Status"] is { } statusColumn)
+            {
+                statusColumn.HeaderCell.SortGlyphDirection = SortOrder.Ascending;
+            }
+        }
+    }
+
+    private static int GetLogStatusSortRank(string status)
+    {
+        return status switch
+        {
+            var value when value.Contains("Thanh cong", StringComparison.OrdinalIgnoreCase) => 0,
+            var value when value.Contains("Dang chay", StringComparison.OrdinalIgnoreCase) => 1,
+            var value when value.Contains("Cho chay", StringComparison.OrdinalIgnoreCase) => 2,
+            var value when value.Contains("Dang cho proxy", StringComparison.OrdinalIgnoreCase) => 3,
+            _ => 4
+        };
+    }
+
+    private sealed class LogRowComparer(LogSortMode sortMode) : System.Collections.IComparer
+    {
+        public int Compare(object? x, object? y)
+        {
+            var left = (DataGridViewRow)x!;
+            var right = (DataGridViewRow)y!;
+            var leftIndex = GetRowIndex(left);
+            var rightIndex = GetRowIndex(right);
+
+            return sortMode switch
+            {
+                LogSortMode.IndexDescending => rightIndex.CompareTo(leftIndex),
+                LogSortMode.StatusSuccessFirst => CompareByStatus(left, right, leftIndex, rightIndex),
+                _ => leftIndex.CompareTo(rightIndex)
+            };
+        }
+
+        private static int CompareByStatus(DataGridViewRow left, DataGridViewRow right, int leftIndex, int rightIndex)
+        {
+            var leftRank = GetLogStatusSortRank(left.Cells["Status"].Value?.ToString() ?? "");
+            var rightRank = GetLogStatusSortRank(right.Cells["Status"].Value?.ToString() ?? "");
+            var rankCompare = leftRank.CompareTo(rightRank);
+            return rankCompare != 0 ? rankCompare : leftIndex.CompareTo(rightIndex);
+        }
+
+        private static int GetRowIndex(DataGridViewRow row)
+        {
+            return int.TryParse(row.Cells["Index"].Value?.ToString(), out var value) ? value : 0;
         }
     }
 

@@ -189,21 +189,41 @@ public sealed class CommentTaskManager
             .Where(queue => queue.Count > 0)
             .ToList();
         var batches = new List<List<ResolvedCommentTask>>();
+        var cursor = 0;
 
         while (queues.Count > 0)
         {
             var batch = new List<ResolvedCommentTask>();
-            for (var i = 0; i < queues.Count && batch.Count < batchSize; i++)
+            var takeCount = Math.Min(batchSize, queues.Count);
+
+            for (var i = 0; i < takeCount && queues.Count > 0; i++)
             {
-                batch.Add(queues[i].Dequeue());
+                if (cursor >= queues.Count)
+                {
+                    cursor = 0;
+                }
+
+                var queue = queues[cursor];
+                batch.Add(queue.Dequeue());
+
+                if (queue.Count == 0)
+                {
+                    queues.RemoveAt(cursor);
+                    if (cursor >= queues.Count)
+                    {
+                        cursor = 0;
+                    }
+                }
+                else
+                {
+                    cursor = (cursor + 1) % queues.Count;
+                }
             }
 
             if (batch.Count > 0)
             {
                 batches.Add(batch);
             }
-
-            queues.RemoveAll(queue => queue.Count == 0);
         }
 
         return batches;

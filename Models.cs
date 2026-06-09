@@ -133,6 +133,12 @@ public sealed class AppSettings
     public string InteractionLinkText { get; set; } = "";
     public string InteractionPostIdText { get; set; } = "";
     public int InteractionActionIndex { get; set; }
+    public string EditUidText { get; set; } = "";
+    public string EditLinkText { get; set; } = "";
+    public string DeleteUidText { get; set; } = "";
+    public string DeleteLinkText { get; set; } = "";
+    public string NewCommentUidText { get; set; } = "";
+    public string NewCommentPostText { get; set; } = "";
     public int InteractionThreads { get; set; } = 5;
     public int InteractionDelayMinSeconds { get; set; }
     public int InteractionDelayMaxSeconds { get; set; }
