@@ -25,7 +25,8 @@ public partial class Form1 : Form
     private readonly Dictionary<string, DataGridViewRow> _logRowsByKey = new(StringComparer.OrdinalIgnoreCase);
     private AppSettings _settings;
     private bool _tasksStoppedByUser;
-    private LogSortMode _logSortMode = LogSortMode.IndexAscending;
+    private string _logSortColumnName = "Index";
+    private SortOrder _logSortDirection = SortOrder.Ascending;
 
     private TextBox _profileTextBox = null!;
     private DataGridView _profileGrid = null!;
@@ -65,13 +66,6 @@ public partial class Form1 : Form
     private TextBox _getCurrentProxyUrlTextBox = null!;
     private NumericUpDown _usesPerProxyInput = null!;
     private DataGridView _proxyGrid = null!;
-
-    private enum LogSortMode
-    {
-        IndexAscending,
-        IndexDescending,
-        StatusSuccessFirst
-    }
 
     public Form1()
     {
@@ -507,9 +501,7 @@ public partial class Form1 : Form
         SetColumnWidths(_logGrid, 55, 160, 760, 90, 180, 120, 560);
         foreach (DataGridViewColumn column in _logGrid.Columns)
         {
-            column.SortMode = column.Name is "Index" or "Status"
-                ? DataGridViewColumnSortMode.Programmatic
-                : DataGridViewColumnSortMode.NotSortable;
+            column.SortMode = DataGridViewColumnSortMode.Programmatic;
         }
 
         _logGrid.ColumnHeaderMouseClick += LogGridColumnHeaderMouseClick;
@@ -1141,7 +1133,8 @@ public partial class Form1 : Form
 
         _logGrid.Rows.Clear();
         _logRowsByKey.Clear();
-        _logSortMode = LogSortMode.IndexAscending;
+        _logSortColumnName = "Index";
+        _logSortDirection = SortOrder.Ascending;
         UpdateLogSortGlyphs();
         _tasksStoppedByUser = false;
         SetButtonRunning(_startTasksButton, true);
@@ -1332,7 +1325,7 @@ public partial class Form1 : Form
                 profile.Index,
                 profile.Uid,
                 profile.Token,
-                profile.TokenStatus,
+                DisplayProfileStatus(profile.TokenStatus),
                 profile.TaskCount,
                 profile.LastError);
             ApplyProfileRowStyle(_profileGrid.Rows[rowIndex], profile.TokenStatus);
@@ -1348,7 +1341,7 @@ public partial class Form1 : Form
                 continue;
             }
 
-            row.Cells["Status"].Value = status;
+            row.Cells["Status"].Value = DisplayProfileStatus(status);
             row.Cells["Error"].Value = error;
             ApplyProfileRowStyle(row, status);
             SaveAllSettings(showMessage: false);
@@ -1374,13 +1367,15 @@ public partial class Form1 : Form
             return WarningColor;
         }
 
-        if (status.Contains("Live", StringComparison.OrdinalIgnoreCase))
+        if (status.Contains("Live", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Sống", StringComparison.OrdinalIgnoreCase))
         {
             return SuccessColor;
         }
 
         if (status.Contains("Die", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("Checkpoint", StringComparison.OrdinalIgnoreCase))
+            status.Contains("Checkpoint", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Chết", StringComparison.OrdinalIgnoreCase))
         {
             return DangerColor;
         }
@@ -1395,18 +1390,88 @@ public partial class Form1 : Form
             return Color.FromArgb(254, 243, 199);
         }
 
-        if (status.Contains("Live", StringComparison.OrdinalIgnoreCase))
+        if (status.Contains("Live", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Sống", StringComparison.OrdinalIgnoreCase))
         {
             return Color.FromArgb(220, 252, 231);
         }
 
         if (status.Contains("Die", StringComparison.OrdinalIgnoreCase) ||
-            status.Contains("Checkpoint", StringComparison.OrdinalIgnoreCase))
+            status.Contains("Checkpoint", StringComparison.OrdinalIgnoreCase) ||
+            status.Contains("Chết", StringComparison.OrdinalIgnoreCase))
         {
             return Color.FromArgb(254, 226, 226);
         }
 
         return PanelBackColor;
+    }
+
+    private static string DisplayProfileStatus(string status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            return "";
+        }
+
+        return status switch
+        {
+            var value when value.Equals("Chua kiem tra", StringComparison.OrdinalIgnoreCase) => "Chưa kiểm tra",
+            var value when value.Equals("Da nap", StringComparison.OrdinalIgnoreCase) => "Đã nạp",
+            var value when value.Equals("Da refresh token", StringComparison.OrdinalIgnoreCase) => "Đã cập nhật token",
+            var value when value.Equals("Live", StringComparison.OrdinalIgnoreCase) => "Sống",
+            var value when value.StartsWith("Die", StringComparison.OrdinalIgnoreCase) => value.Replace("Die", "Chết", StringComparison.OrdinalIgnoreCase),
+            var value when value.StartsWith("Token out", StringComparison.OrdinalIgnoreCase) => value.Replace("Token out", "Token hết hạn", StringComparison.OrdinalIgnoreCase),
+            _ => status
+        };
+    }
+
+    private static string DisplayProxyStatus(string status)
+    {
+        return status switch
+        {
+            "Stopped" => "Đã dừng",
+            "Starting" => "Đang khởi động",
+            "Refreshing" => "Đang lấy IP mới",
+            "Waiting" => "Đang chờ",
+            "Ready" => "Sẵn sàng",
+            "Error" => "Lỗi",
+            _ => status
+        };
+    }
+
+    private static string DisplayLogAction(string action)
+    {
+        return action switch
+        {
+            "Edit" => "Chỉnh sửa",
+            "Delete" => "Xóa",
+            "Comment moi" => "Comment mới",
+            _ => action
+        };
+    }
+
+    private static string DisplayProxyText(string proxy)
+    {
+        return string.Equals(proxy, "Direct", StringComparison.OrdinalIgnoreCase)
+            ? "Không proxy"
+            : proxy;
+    }
+
+    private static string DisplayLogStatus(string status)
+    {
+        return status switch
+        {
+            "Thanh cong" => "Thành công",
+            "That bai" => "Thất bại",
+            "Cho chay" => "Chờ chạy",
+            "Dang chay" => "Đang chạy",
+            "Dang cho proxy" => "Đang chờ proxy",
+            "Dung" => "Đã dừng",
+            "Dung profile" => "Dừng profile",
+            var value when value.StartsWith("Token out", StringComparison.OrdinalIgnoreCase) => value.Replace("Token out", "Token hết hạn", StringComparison.OrdinalIgnoreCase),
+            var value when value.StartsWith("Die", StringComparison.OrdinalIgnoreCase) => value.Replace("Die", "Chết", StringComparison.OrdinalIgnoreCase),
+            _ => status
+        };
     }
 
     private void RefreshProxyGrid()
@@ -1425,7 +1490,7 @@ public partial class Form1 : Form
                 proxy.CurrentProxy,
                 proxy.RemainingUses,
                 proxy.ReservedUses,
-                proxy.Status,
+                DisplayProxyStatus(proxy.Status),
                 proxy.LastGetIpAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
                 proxy.LastError);
         }
@@ -1445,9 +1510,9 @@ public partial class Form1 : Form
                 _logGrid.Rows.Count + 1,
                 entry.Uid,
                 entry.CommentLink,
-                entry.Action,
-                entry.Proxy,
-                entry.Status,
+                DisplayLogAction(entry.Action),
+                DisplayProxyText(entry.Proxy),
+                DisplayLogStatus(entry.Status),
                 entry.Error);
             row = _logGrid.Rows[rowIndex];
             row.Tag = entry.Key;
@@ -1464,9 +1529,9 @@ public partial class Form1 : Form
                 row.Cells["Link"].Value = entry.CommentLink;
             }
 
-            row.Cells["Action"].Value = entry.Action;
-            row.Cells["Proxy"].Value = entry.Proxy;
-            row.Cells["Status"].Value = entry.Status;
+            row.Cells["Action"].Value = DisplayLogAction(entry.Action);
+            row.Cells["Proxy"].Value = DisplayProxyText(entry.Proxy);
+            row.Cells["Status"].Value = DisplayLogStatus(entry.Status);
             row.Cells["Error"].Value = entry.Error;
         }
 
@@ -1482,19 +1547,16 @@ public partial class Form1 : Form
         }
 
         var columnName = _logGrid.Columns[e.ColumnIndex].Name;
-        if (columnName == "Index")
+        if (_logSortColumnName.Equals(columnName, StringComparison.OrdinalIgnoreCase))
         {
-            _logSortMode = _logSortMode == LogSortMode.IndexDescending
-                ? LogSortMode.IndexAscending
-                : LogSortMode.IndexDescending;
-        }
-        else if (columnName == "Status")
-        {
-            _logSortMode = LogSortMode.StatusSuccessFirst;
+            _logSortDirection = _logSortDirection == SortOrder.Descending
+                ? SortOrder.Ascending
+                : SortOrder.Descending;
         }
         else
         {
-            return;
+            _logSortColumnName = columnName;
+            _logSortDirection = SortOrder.Ascending;
         }
 
         ApplyCurrentLogSort();
@@ -1511,7 +1573,7 @@ public partial class Form1 : Form
         _logGrid.SuspendLayout();
         try
         {
-            _logGrid.Sort(new LogRowComparer(_logSortMode));
+            _logGrid.Sort(new LogRowComparer(_logSortColumnName, _logSortDirection));
         }
         finally
         {
@@ -1531,26 +1593,9 @@ public partial class Form1 : Form
             column.HeaderCell.SortGlyphDirection = SortOrder.None;
         }
 
-        if (_logSortMode == LogSortMode.IndexAscending)
+        if (_logGrid.Columns[_logSortColumnName] is { } sortColumn)
         {
-            if (_logGrid.Columns["Index"] is { } indexColumn)
-            {
-                indexColumn.HeaderCell.SortGlyphDirection = SortOrder.Ascending;
-            }
-        }
-        else if (_logSortMode == LogSortMode.IndexDescending)
-        {
-            if (_logGrid.Columns["Index"] is { } indexColumn)
-            {
-                indexColumn.HeaderCell.SortGlyphDirection = SortOrder.Descending;
-            }
-        }
-        else
-        {
-            if (_logGrid.Columns["Status"] is { } statusColumn)
-            {
-                statusColumn.HeaderCell.SortGlyphDirection = SortOrder.Ascending;
-            }
+            sortColumn.HeaderCell.SortGlyphDirection = _logSortDirection;
         }
     }
 
@@ -1558,15 +1603,19 @@ public partial class Form1 : Form
     {
         return status switch
         {
-            var value when value.Contains("Thanh cong", StringComparison.OrdinalIgnoreCase) => 0,
-            var value when value.Contains("Dang chay", StringComparison.OrdinalIgnoreCase) => 1,
-            var value when value.Contains("Cho chay", StringComparison.OrdinalIgnoreCase) => 2,
-            var value when value.Contains("Dang cho proxy", StringComparison.OrdinalIgnoreCase) => 3,
+            var value when value.Contains("Thanh cong", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Thành công", StringComparison.OrdinalIgnoreCase) => 0,
+            var value when value.Contains("Dang chay", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Đang chạy", StringComparison.OrdinalIgnoreCase) => 1,
+            var value when value.Contains("Cho chay", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Chờ chạy", StringComparison.OrdinalIgnoreCase) => 2,
+            var value when value.Contains("Dang cho proxy", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Đang chờ proxy", StringComparison.OrdinalIgnoreCase) => 3,
             _ => 4
         };
     }
 
-    private sealed class LogRowComparer(LogSortMode sortMode) : System.Collections.IComparer
+    private sealed class LogRowComparer(string columnName, SortOrder direction) : System.Collections.IComparer
     {
         public int Compare(object? x, object? y)
         {
@@ -1574,21 +1623,44 @@ public partial class Form1 : Form
             var right = (DataGridViewRow)y!;
             var leftIndex = GetRowIndex(left);
             var rightIndex = GetRowIndex(right);
+            var compare = CompareByColumn(left, right, columnName);
 
-            return sortMode switch
+            if (compare == 0)
             {
-                LogSortMode.IndexDescending => rightIndex.CompareTo(leftIndex),
-                LogSortMode.StatusSuccessFirst => CompareByStatus(left, right, leftIndex, rightIndex),
-                _ => leftIndex.CompareTo(rightIndex)
-            };
+                compare = leftIndex.CompareTo(rightIndex);
+            }
+
+            return direction == SortOrder.Descending ? -compare : compare;
         }
 
-        private static int CompareByStatus(DataGridViewRow left, DataGridViewRow right, int leftIndex, int rightIndex)
+        private static int CompareByColumn(DataGridViewRow left, DataGridViewRow right, string columnName)
         {
-            var leftRank = GetLogStatusSortRank(left.Cells["Status"].Value?.ToString() ?? "");
-            var rightRank = GetLogStatusSortRank(right.Cells["Status"].Value?.ToString() ?? "");
-            var rankCompare = leftRank.CompareTo(rightRank);
-            return rankCompare != 0 ? rankCompare : leftIndex.CompareTo(rightIndex);
+            if (columnName.Equals("Status", StringComparison.OrdinalIgnoreCase))
+            {
+                var leftRank = GetLogStatusSortRank(left.Cells["Status"].Value?.ToString() ?? "");
+                var rightRank = GetLogStatusSortRank(right.Cells["Status"].Value?.ToString() ?? "");
+                var rankCompare = leftRank.CompareTo(rightRank);
+                if (rankCompare != 0)
+                {
+                    return rankCompare;
+                }
+            }
+
+            if (left.DataGridView?.Columns.Contains(columnName) != true ||
+                right.DataGridView?.Columns.Contains(columnName) != true)
+            {
+                return 0;
+            }
+
+            var leftText = left.Cells[columnName].Value?.ToString() ?? "";
+            var rightText = right.Cells[columnName].Value?.ToString() ?? "";
+            if (decimal.TryParse(leftText, out var leftNumber) &&
+                decimal.TryParse(rightText, out var rightNumber))
+            {
+                return leftNumber.CompareTo(rightNumber);
+            }
+
+            return string.Compare(leftText, rightText, StringComparison.CurrentCultureIgnoreCase);
         }
 
         private static int GetRowIndex(DataGridViewRow row)
@@ -1602,14 +1674,21 @@ public partial class Form1 : Form
         var status = row.Cells["Status"].Value?.ToString() ?? "";
         var color = status switch
         {
-            var value when value.Contains("Thanh cong", StringComparison.OrdinalIgnoreCase) => SuccessColor,
-            var value when value.Contains("That bai", StringComparison.OrdinalIgnoreCase) => DangerColor,
-            var value when value.Contains("Token out", StringComparison.OrdinalIgnoreCase) => WarningColor,
-            var value when value.Contains("Die", StringComparison.OrdinalIgnoreCase) => DangerColor,
+            var value when value.Contains("Thanh cong", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Thành công", StringComparison.OrdinalIgnoreCase) => SuccessColor,
+            var value when value.Contains("That bai", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Thất bại", StringComparison.OrdinalIgnoreCase) => DangerColor,
+            var value when value.Contains("Token out", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Token hết hạn", StringComparison.OrdinalIgnoreCase) => WarningColor,
+            var value when value.Contains("Die", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Chết", StringComparison.OrdinalIgnoreCase) => DangerColor,
             var value when value.Contains("Checkpoint", StringComparison.OrdinalIgnoreCase) => DangerColor,
-            var value when value.Contains("Dang cho proxy", StringComparison.OrdinalIgnoreCase) => WarningColor,
-            var value when value.Contains("Dang chay", StringComparison.OrdinalIgnoreCase) => PrimaryDarkColor,
-            var value when value.Contains("Cho chay", StringComparison.OrdinalIgnoreCase) => Color.FromArgb(75, 85, 99),
+            var value when value.Contains("Dang cho proxy", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Đang chờ proxy", StringComparison.OrdinalIgnoreCase) => WarningColor,
+            var value when value.Contains("Dang chay", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Đang chạy", StringComparison.OrdinalIgnoreCase) => PrimaryDarkColor,
+            var value when value.Contains("Cho chay", StringComparison.OrdinalIgnoreCase) ||
+                           value.Contains("Chờ chạy", StringComparison.OrdinalIgnoreCase) => Color.FromArgb(75, 85, 99),
             _ => TextColor
         };
 

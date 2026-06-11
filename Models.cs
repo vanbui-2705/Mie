@@ -30,6 +30,7 @@ public sealed class ProxyKeyState
     public int ReservedUses { get; set; }
     public string Status { get; set; } = "Stopped";
     public DateTime? LastGetIpAt { get; set; }
+    public DateTime? RefreshStartedAt { get; set; }
     public string LastError { get; set; } = "";
     public ProxyEndpoint? Endpoint { get; set; }
 

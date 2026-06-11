@@ -19,7 +19,7 @@ static class Program
                 return;
             }
 
-            MessageBox.Show(e.Exception.Message, "Loi", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(e.Exception.Message, "Lỗi", MessageBoxButtons.OK, MessageBoxIcon.Error);
         };
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
         {

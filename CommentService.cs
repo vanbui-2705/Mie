@@ -40,14 +40,14 @@ public sealed class FacebookGraphCommentService : ICommentService
             {
                 var postId = ExtractPostId(request.CommentLink);
                 return string.IsNullOrWhiteSpace(postId)
-                    ? new CommentResult(false, "Khong parse duoc post id/link post.")
+                    ? new CommentResult(false, "Không đọc được ID/link bài viết.")
                     : await CreateCommentAsync(httpClient, postId, request.Profile.Token, request.NewText, request.ImagePath, cancellationToken);
             }
 
             var commentId = ExtractCommentId(request.CommentLink);
             if (string.IsNullOrWhiteSpace(commentId))
             {
-                return new CommentResult(false, "Khong parse duoc comment_id tu link.");
+                return new CommentResult(false, "Không đọc được comment_id từ link.");
             }
 
             return request.Action == CommentActionKind.Delete
@@ -56,11 +56,11 @@ public sealed class FacebookGraphCommentService : ICommentService
         }
         catch (OperationCanceledException)
         {
-            return new CommentResult(false, "Tac vu da bi huy.");
+            return new CommentResult(false, "Tác vụ đã bị hủy.");
         }
         catch (IOException ex) when (ex.Message.Contains("aborted", StringComparison.OrdinalIgnoreCase))
         {
-            return new CommentResult(false, "Tac vu bi huy hoac ket noi bi ngat.");
+            return new CommentResult(false, "Tác vụ bị hủy hoặc kết nối bị ngắt.");
         }
     }
 
@@ -88,7 +88,7 @@ public sealed class FacebookGraphCommentService : ICommentService
     {
         if (string.IsNullOrWhiteSpace(newText))
         {
-            return new CommentResult(false, "Noi dung edit dang trong.");
+            return new CommentResult(false, "Nội dung chỉnh sửa đang trống.");
         }
 
         var url = $"https://graph.facebook.com/{Uri.EscapeDataString(commentId)}";
@@ -110,7 +110,7 @@ public sealed class FacebookGraphCommentService : ICommentService
             return BuildGraphErrorResult(response.StatusCode, body);
         }
 
-        return new CommentResult(true, "Da edit comment.");
+        return new CommentResult(true, "Đã chỉnh sửa comment.");
     }
 
     private static async Task<CommentResult> EditWithImageAsync(
@@ -137,7 +137,7 @@ public sealed class FacebookGraphCommentService : ICommentService
             return BuildGraphErrorResult(response.StatusCode, body);
         }
 
-        return new CommentResult(true, $"Da edit comment kem anh {Path.GetFileName(imagePath)}.");
+        return new CommentResult(true, $"Đã chỉnh sửa comment kèm ảnh {Path.GetFileName(imagePath)}.");
     }
 
     private static async Task<CommentResult> DeleteAsync(
@@ -154,7 +154,7 @@ public sealed class FacebookGraphCommentService : ICommentService
             return BuildGraphErrorResult(response.StatusCode, body);
         }
 
-        return new CommentResult(true, "Da xoa comment.");
+        return new CommentResult(true, "Đã xóa comment.");
     }
 
     private static async Task<CommentResult> CreateCommentAsync(
@@ -167,7 +167,7 @@ public sealed class FacebookGraphCommentService : ICommentService
     {
         if (string.IsNullOrWhiteSpace(newText))
         {
-            return new CommentResult(false, "Noi dung comment dang trong.");
+            return new CommentResult(false, "Nội dung comment đang trống.");
         }
 
         var url = $"https://graph.facebook.com/{Uri.EscapeDataString(postId)}/comments";
@@ -208,9 +208,9 @@ public sealed class FacebookGraphCommentService : ICommentService
                 var createdId = ExtractCreatedId(body);
                 var link = BuildCommentLink(postId, createdId);
                 var imageSuffix = !string.IsNullOrWhiteSpace(imagePath) && File.Exists(imagePath)
-                    ? $" kem anh {Path.GetFileName(imagePath)}"
+                    ? $" kèm ảnh {Path.GetFileName(imagePath)}"
                     : "";
-                return new CommentResult(true, $"Da tao comment moi{imageSuffix}.", link);
+                return new CommentResult(true, $"Đã tạo comment mới{imageSuffix}.", link);
             }
         }
         catch
@@ -327,8 +327,8 @@ public sealed class FacebookGraphCommentService : ICommentService
                 var userMessage = GetString(error, "error_user_msg");
                 var hint = code switch
                 {
-                    200 => " Token khong co quyen voi comment nay, hoac comment khong thuoc UID/token dang dung.",
-                    100 => " Sai ID/link post, post khong ton tai voi token nay, token khong co quyen doc/comment post, hoac ban dang nhap nham comment_id thay vi ID/link bai post.",
+                    200 => " Token không có quyền với comment này, hoặc comment không thuộc UID/token đang dùng.",
+                    100 => " Sai ID/link bài viết, bài viết không tồn tại với token này, token không có quyền đọc/comment bài viết, hoặc bạn đang nhập nhầm comment_id thay vì ID/link bài viết.",
                     _ => ""
                 };
 

@@ -2,9 +2,12 @@ namespace ToolEditDeleteCmt;
 
 public sealed class ProxyManager
 {
+    private const int RefreshTimeoutSeconds = 15;
+
     private readonly object _sync = new();
     private readonly KiotProxyClient _client = new();
     private readonly List<ProxyKeyState> _states = [];
+    private readonly Dictionary<string, int> _refreshVersions = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _cts;
     private Task? _monitorTask;
     private AppSettings _settings = new();
@@ -28,6 +31,7 @@ public sealed class ProxyManager
                     ReservedUses = s.ReservedUses,
                     Status = s.Status,
                     LastGetIpAt = s.LastGetIpAt,
+                    RefreshStartedAt = s.RefreshStartedAt,
                     LastError = s.LastError,
                     Endpoint = s.Endpoint
                 })
@@ -47,6 +51,7 @@ public sealed class ProxyManager
         lock (_sync)
         {
             _states.Clear();
+            _refreshVersions.Clear();
             _nextProxyIndex = 0;
             for (var i = 0; i < keys.Count; i++)
             {
@@ -69,6 +74,7 @@ public sealed class ProxyManager
         lock (_sync)
         {
             _nextProxyIndex = 0;
+            _refreshVersions.Clear();
             foreach (var state in _states)
             {
                 state.Status = "Starting";
@@ -92,6 +98,7 @@ public sealed class ProxyManager
             {
                 state.Status = "Stopped";
                 state.ReservedUses = 0;
+                state.RefreshStartedAt = null;
             }
         }
 
@@ -172,6 +179,8 @@ public sealed class ProxyManager
             if (needsRefresh)
             {
                 current.Status = "Refreshing";
+                current.RefreshStartedAt = DateTime.Now;
+                current.LastError = "";
             }
         }
 
@@ -189,12 +198,16 @@ public sealed class ProxyManager
             List<string> keys;
             lock (_sync)
             {
+                var staleRefreshingBefore = DateTime.Now.AddSeconds(-RefreshTimeoutSeconds);
                 keys = _states
                     .Where(s =>
-                        s.Status != "Refreshing" &&
-                        (s.Endpoint is null ||
-                         s.RemainingUses <= 0 ||
-                         s.Status is "Starting" or "Error" or "Waiting"))
+                        (s.Status == "Refreshing" &&
+                         s.RefreshStartedAt is not null &&
+                         s.RefreshStartedAt <= staleRefreshingBefore) ||
+                        (s.Status != "Refreshing" &&
+                         (s.Endpoint is null ||
+                          s.RemainingUses <= 0 ||
+                          s.Status is "Starting" or "Error" or "Waiting")))
                     .Select(s => s.ApiKey)
                     .ToList();
             }
@@ -217,19 +230,27 @@ public sealed class ProxyManager
 
     private async Task RefreshOneAsync(string apiKey, CancellationToken cancellationToken)
     {
-        SetStatus(apiKey, "Refreshing", "");
+        var refreshVersion = BeginRefresh(apiKey);
+        if (refreshVersion == 0)
+        {
+            return;
+        }
+
         try
         {
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(RefreshTimeoutSeconds));
+
             var endpoint = await _client.GetNewProxyAsync(
                 apiKey,
                 _settings.KiotAuthToken,
                 _settings.GetNewProxyUrlTemplate,
-                cancellationToken);
+                timeoutCts.Token);
 
             lock (_sync)
             {
                 var state = _states.FirstOrDefault(s => s.ApiKey == apiKey);
-                if (state is null)
+                if (state is null || !IsCurrentRefreshVersion(apiKey, refreshVersion))
                 {
                     return;
                 }
@@ -240,7 +261,21 @@ public sealed class ProxyManager
                 state.ReservedUses = 0;
                 state.Status = "Ready";
                 state.LastGetIpAt = DateTime.Now;
+                state.RefreshStartedAt = null;
                 state.LastError = "";
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            if (!IsCurrentRefreshVersion(apiKey, refreshVersion))
+            {
+                return;
+            }
+
+            SetStatus(apiKey, "Waiting", $"Quá {RefreshTimeoutSeconds}s chưa lấy được IP, gọi lấy IP mới lại.");
+            if (_cts is not null)
+            {
+                _ = RefreshOneAsync(apiKey, cancellationToken);
             }
         }
         catch (OperationCanceledException)
@@ -249,11 +284,46 @@ public sealed class ProxyManager
         }
         catch (Exception ex)
         {
+            if (!IsCurrentRefreshVersion(apiKey, refreshVersion))
+            {
+                return;
+            }
+
             SetStatus(apiKey, "Waiting", ex.Message);
         }
         finally
         {
             StateChanged?.Invoke();
+        }
+    }
+
+    private int BeginRefresh(string apiKey)
+    {
+        lock (_sync)
+        {
+            var state = _states.FirstOrDefault(s => s.ApiKey == apiKey);
+            if (state is null)
+            {
+                return 0;
+            }
+
+            var refreshVersion = _refreshVersions.TryGetValue(apiKey, out var currentVersion)
+                ? currentVersion + 1
+                : 1;
+            _refreshVersions[apiKey] = refreshVersion;
+            state.Status = "Refreshing";
+            state.RefreshStartedAt = DateTime.Now;
+            state.LastError = "";
+            return refreshVersion;
+        }
+    }
+
+    private bool IsCurrentRefreshVersion(string apiKey, int refreshVersion)
+    {
+        lock (_sync)
+        {
+            return _refreshVersions.TryGetValue(apiKey, out var currentVersion) &&
+                   currentVersion == refreshVersion;
         }
     }
 
@@ -268,6 +338,9 @@ public sealed class ProxyManager
             }
 
             state.Status = status;
+            state.RefreshStartedAt = status.Equals("Refreshing", StringComparison.OrdinalIgnoreCase)
+                ? DateTime.Now
+                : null;
             state.LastError = error;
         }
 

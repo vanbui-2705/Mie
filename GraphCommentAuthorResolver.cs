@@ -14,23 +14,23 @@ public sealed class GraphCommentAuthorResolver
         var commentId = FacebookGraphCommentService.ExtractCommentId(commentLink);
         if (string.IsNullOrWhiteSpace(commentId))
         {
-            return new GraphAuthorLookupResult(null, "Khong parse duoc comment_id tu link.");
+            return new GraphAuthorLookupResult(null, "Không đọc được comment_id từ link.");
         }
 
         try
         {
             var uid = await ReadFromGraphAsync(commentId, checkerProfile.Token, proxy, cancellationToken);
             return string.IsNullOrWhiteSpace(uid)
-                ? new GraphAuthorLookupResult(null, "Graph API khong tra ve from.id.")
-                : new GraphAuthorLookupResult(uid, $"Lay UID bang Graph voi token check UID {checkerProfile.Uid}.");
+                ? new GraphAuthorLookupResult(null, "Graph API không trả về from.id.")
+                : new GraphAuthorLookupResult(uid, $"Lấy UID bằng Graph với token kiểm tra UID {checkerProfile.Uid}.");
         }
         catch (OperationCanceledException)
         {
-            return new GraphAuthorLookupResult(null, "Da huy request check UID.");
+            return new GraphAuthorLookupResult(null, "Đã hủy request kiểm tra UID.");
         }
         catch (IOException ex) when (ex.Message.Contains("aborted", StringComparison.OrdinalIgnoreCase))
         {
-            return new GraphAuthorLookupResult(null, "Request check UID bi huy.");
+            return new GraphAuthorLookupResult(null, "Request kiểm tra UID bị hủy.");
         }
         catch (Exception ex)
         {

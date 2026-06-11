@@ -157,7 +157,7 @@ public sealed class CommentTaskManager
             {
                 if (checkerProfile is null)
                 {
-                    AddLog("", task.CommentLink, action, "Direct", "That bai", "Chua co token de check UID bang Graph.", BuildLogKey(action, task.CommentLink));
+                    AddLog("", task.CommentLink, action, "Direct", "That bai", "Chưa có token để kiểm tra UID bằng Graph.", BuildLogKey(action, task.CommentLink));
                     Increment(failed: 1, processed: 1);
                     continue;
                 }
@@ -167,7 +167,7 @@ public sealed class CommentTaskManager
 
                 if (string.IsNullOrWhiteSpace(uid))
                 {
-                    AddLog(checkerProfile.Uid, task.CommentLink, action, "Direct", "That bai", $"Khong lay duoc UID bang Graph. {graphResult.Message}", BuildLogKey(action, task.CommentLink));
+                    AddLog(checkerProfile.Uid, task.CommentLink, action, "Direct", "That bai", $"Không lấy được UID bằng Graph. {graphResult.Message}", BuildLogKey(action, task.CommentLink));
                     Increment(failed: 1, processed: 1);
                     continue;
                 }
@@ -248,14 +248,14 @@ public sealed class CommentTaskManager
         var logKey = BuildLogKey(action, task.CommentLink);
         if (_blockedProfiles.TryGetValue(task.Uid, out var blockedIssue))
         {
-            AddLog(task.Uid, task.CommentLink, action, "", "Dung profile", $"Profile da dung do {blockedIssue.Status}.", logKey);
+            AddLog(task.Uid, task.CommentLink, action, "", "Dung profile", $"Profile đã dừng do {blockedIssue.Status}.", logKey);
             Increment(failed: 1, processed: 1);
             return;
         }
 
         if (profile is null)
         {
-            AddLog(task.Uid, task.CommentLink, action, "", "That bai", "UID comment khong co trong tab Profile.", logKey);
+            AddLog(task.Uid, task.CommentLink, action, "", "That bai", "UID comment không có trong tab Hồ sơ.", logKey);
             Increment(failed: 1, processed: 1);
             return;
         }
@@ -269,7 +269,7 @@ public sealed class CommentTaskManager
                 lease = _proxyManager.TryAcquireNow();
                 if (lease is null)
                 {
-                    AddLog(profile.Uid, task.CommentLink, action, "", "Dang cho proxy", "Proxy dang refresh hoac chua co IP Ready.", logKey);
+                    AddLog(profile.Uid, task.CommentLink, action, "", "Dang cho proxy", "Proxy đang lấy IP mới hoặc chưa sẵn sàng.", logKey);
                     Increment(waitingProxy: 1);
                     waitingProxyAdded = true;
                     lease = await _proxyManager.AcquireAsync(cancellationToken);
@@ -295,7 +295,7 @@ public sealed class CommentTaskManager
                 Proxy = proxy
             };
 
-            AddLog(profile.Uid, task.CommentLink, action, proxyDisplay, "Dang chay", string.IsNullOrWhiteSpace(imagePath) ? "" : $"Anh: {Path.GetFileName(imagePath)}", logKey);
+            AddLog(profile.Uid, task.CommentLink, action, proxyDisplay, "Dang chay", string.IsNullOrWhiteSpace(imagePath) ? "" : $"Ảnh: {Path.GetFileName(imagePath)}", logKey);
             var result = await _commentService.ExecuteAsync(request, cancellationToken);
             lease?.MarkUsed();
 
@@ -318,7 +318,7 @@ public sealed class CommentTaskManager
             }
 
             lease?.Dispose();
-            AddLog(profile.Uid, task.CommentLink, action, lease?.Endpoint.Display ?? "", "Dung", "Da nhan Stop.", logKey);
+            AddLog(profile.Uid, task.CommentLink, action, lease?.Endpoint.Display ?? "", "Dung", "Đã nhận lệnh dừng.", logKey);
             Increment(processed: 1);
         }
         catch (Exception ex)

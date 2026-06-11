@@ -63,7 +63,7 @@ public sealed class KiotProxyClient
         var root = document.RootElement;
         if (root.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.False)
         {
-            var message = TryGetString(root, "message") ?? "KiotProxy tra ve success=false";
+            var message = TryGetString(root, "message") ?? "KiotProxy trả về success=false";
             throw new InvalidOperationException(NormalizeErrorMessage(root, message));
         }
 
@@ -88,7 +88,7 @@ public sealed class KiotProxyClient
 
         if (string.IsNullOrWhiteSpace(host) || port <= 0)
         {
-            throw new InvalidOperationException("Khong tim thay host/httpPort trong response KiotProxy.");
+            throw new InvalidOperationException("Không tìm thấy host/httpPort trong phản hồi KiotProxy.");
         }
 
         return new ProxyEndpoint

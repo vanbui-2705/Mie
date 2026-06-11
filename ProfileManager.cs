@@ -32,7 +32,7 @@ public sealed class ProfileManager
             var parts = line.Split('|', 2);
             if (parts.Length != 2 || string.IsNullOrWhiteSpace(parts[0]) || string.IsNullOrWhiteSpace(parts[1]))
             {
-                errors.Add($"Sai dinh dang: {line}");
+                errors.Add($"Sai định dạng: {line}");
                 continue;
             }
 
