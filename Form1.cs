@@ -646,16 +646,16 @@ public partial class Form1 : Form
             Padding = new Padding(12),
             BackColor = AppBackColor
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 274));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 238));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var inputs = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 6, BackColor = AppBackColor };
+        var inputs = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 5, BackColor = AppBackColor };
         inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        for (var i = 0; i < 6; i++)
+        for (var i = 0; i < 5; i++)
         {
             inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, i == 1 ? 86 : 36));
         }
@@ -702,16 +702,6 @@ public partial class Form1 : Form
         StyleNumeric(_proxyCheckIntervalInput);
         inputs.Controls.Add(_proxyCheckIntervalInput, 1, 4);
 
-        var hint = new Label
-        {
-            Text = "Dùng placeholder {apiKey}. Dữ liệu nhạy cảm được lưu bằng Windows DPAPI theo user hiện tại.",
-            Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            ForeColor = Color.FromArgb(75, 85, 99),
-            BackColor = AppBackColor
-        };
-        inputs.SetColumnSpan(hint, 4);
-        inputs.Controls.Add(hint, 0, 5);
         root.Controls.Add(inputs, 0, 0);
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, BackColor = AppBackColor, Padding = new Padding(0, 5, 0, 0) };
