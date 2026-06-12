@@ -68,11 +68,19 @@ public sealed class KiotProxyClient
         }
 
         var data = root.TryGetProperty("data", out var dataElement) ? dataElement : root;
+        var apiStatus = TryGetString(root, "status") ?? TryGetString(data, "status") ?? "";
+        var apiMessage =
+            TryGetString(root, "message") ??
+            TryGetString(data, "message") ??
+            TryGetString(root, "msg") ??
+            TryGetString(data, "msg") ??
+            "";
         var host = TryGetString(data, "host") ?? "";
         var port = TryGetInt(data, "httpPort");
         var username = TryGetString(data, "proxyUser");
         var password = TryGetString(data, "proxyPass");
         var http = TryGetString(data, "http") ?? TryGetString(data, "httpStaticProxy") ?? "";
+        var expiresAt = TryGetProxyExpiresAt(data);
 
         if (string.IsNullOrWhiteSpace(host) || port <= 0)
         {
@@ -83,6 +91,7 @@ public sealed class KiotProxyClient
                 port = parsed.HttpPort;
                 username ??= parsed.Username;
                 password ??= parsed.Password;
+                expiresAt ??= parsed.ExpiresAt;
             }
         }
 
@@ -97,7 +106,10 @@ public sealed class KiotProxyClient
             HttpPort = port,
             Username = username,
             Password = password,
-            Display = !string.IsNullOrWhiteSpace(http) ? http : $"{host}:{port}"
+            Display = !string.IsNullOrWhiteSpace(http) ? http : $"{host}:{port}",
+            ExpiresAt = expiresAt,
+            ApiStatus = apiStatus,
+            ApiMessage = apiMessage
         };
     }
 
@@ -128,6 +140,172 @@ public sealed class KiotProxyClient
             Password = parts.Length >= 4 ? string.Join(':', parts.Skip(3)) : null,
             Display = value
         };
+    }
+
+    private static DateTime? TryGetProxyExpiresAt(JsonElement element)
+    {
+        var now = DateTime.Now;
+        DateTime? best = null;
+        foreach (var candidate in EnumerateJsonProperties(element))
+        {
+            var name = candidate.Name;
+            var value = candidate.Value;
+            var parsed = TryParseExpiryValue(name, value, now);
+            if (parsed is null)
+            {
+                continue;
+            }
+
+            if (parsed.Value > now && (best is null || parsed.Value < best.Value))
+            {
+                best = parsed.Value;
+            }
+        }
+
+        return best;
+    }
+
+    private static IEnumerable<(string Name, JsonElement Value)> EnumerateJsonProperties(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in element.EnumerateObject())
+            {
+                yield return (property.Name, property.Value);
+                foreach (var child in EnumerateJsonProperties(property.Value))
+                {
+                    yield return child;
+                }
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in element.EnumerateArray())
+            {
+                foreach (var child in EnumerateJsonProperties(item))
+                {
+                    yield return child;
+                }
+            }
+        }
+    }
+
+    private static DateTime? TryParseExpiryValue(string name, JsonElement value, DateTime now)
+    {
+        var normalizedName = Regex.Replace(name, "[^a-zA-Z]", "").ToLowerInvariant();
+        var isChangeCooldown =
+            normalizedName.Contains("change") ||
+            normalizedName.Contains("next") ||
+            normalizedName.Contains("request") ||
+            normalizedName.Contains("retry") ||
+            normalizedName.Contains("wait") ||
+            normalizedName.Contains("cooldown");
+        if (isChangeCooldown)
+        {
+            return null;
+        }
+
+        var isExpiryName =
+            normalizedName.Contains("expire") ||
+            normalizedName.Contains("expired") ||
+            normalizedName.Contains("expiration") ||
+            normalizedName.Contains("timeout") ||
+            normalizedName.Contains("ttl") ||
+            normalizedName.Contains("timelive") ||
+            normalizedName.Contains("lifetime") ||
+            normalizedName.Contains("timeleft") ||
+            normalizedName.Contains("remain") ||
+            normalizedName.Contains("duration");
+
+        if (!isExpiryName)
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number))
+        {
+            return ParseNumericExpiry(normalizedName, number, now);
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            var text = value.GetString()?.Trim();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            if (double.TryParse(text, out var textNumber))
+            {
+                return ParseNumericExpiry(normalizedName, textNumber, now);
+            }
+
+            if (DateTime.TryParse(text, out var dateTime))
+            {
+                return dateTime.Kind == DateTimeKind.Utc ? dateTime.ToLocalTime() : dateTime;
+            }
+
+            var duration = TryParseDurationText(text);
+            if (duration is not null)
+            {
+                return now.Add(duration.Value);
+            }
+        }
+
+        return null;
+    }
+
+    private static DateTime? ParseNumericExpiry(string normalizedName, double number, DateTime now)
+    {
+        if (number <= 0)
+        {
+            return null;
+        }
+
+        if (number > 10_000_000_000)
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds((long)number).LocalDateTime;
+        }
+
+        if (number > 1_000_000_000)
+        {
+            return DateTimeOffset.FromUnixTimeSeconds((long)number).LocalDateTime;
+        }
+
+        if (normalizedName.Contains("ms") ||
+            normalizedName.Contains("millisecond") ||
+            number > 86_400)
+        {
+            return now.AddMilliseconds(number);
+        }
+
+        if (normalizedName.Contains("minute") || normalizedName.Contains("min"))
+        {
+            return now.AddMinutes(number);
+        }
+
+        if (normalizedName.Contains("hour"))
+        {
+            return now.AddHours(number);
+        }
+
+        return now.AddSeconds(number);
+    }
+
+    private static TimeSpan? TryParseDurationText(string text)
+    {
+        var normalized = text.ToLowerInvariant();
+        var hours = MatchDurationPart(normalized, @"(\d+)\s*(?:h|hour|hours|giờ|gio)");
+        var minutes = MatchDurationPart(normalized, @"(\d+)\s*(?:m|min|mins|minute|minutes|phút|phut)");
+        var seconds = MatchDurationPart(normalized, @"(\d+)\s*(?:s|sec|secs|second|seconds|giây|giay)");
+        var total = TimeSpan.FromHours(hours) + TimeSpan.FromMinutes(minutes) + TimeSpan.FromSeconds(seconds);
+        return total > TimeSpan.Zero ? total : null;
+    }
+
+    private static int MatchDurationPart(string text, string pattern)
+    {
+        var match = Regex.Match(text, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var value) ? value : 0;
     }
 
     private static string? TryGetString(JsonElement element, string name)

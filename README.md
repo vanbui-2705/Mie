@@ -201,6 +201,156 @@ bin\Release\net9.0-windows\win-x64\publish
 
 ---
 
+## Offline License / License Offline
+
+FlowMeta uses an offline machine-bound license:
+
+- The app shows a `MachineID` when the user has no valid license.
+- The user sends that `MachineID` to the owner/admin.
+- The owner generates a license key with an expiry date.
+- The user pastes the license key into the app.
+- The license is saved locally with Windows DPAPI at:
+
+```text
+%LOCALAPPDATA%\FlowMeta\license.dpapi
+```
+
+Generate a license key:
+
+Build/open the standalone admin app:
+
+```powershell
+dotnet build .\FlowMetaLicenseAdmin\FlowMetaLicenseAdmin.csproj -c Release
+```
+
+Admin app output:
+
+```text
+FlowMetaLicenseAdmin\bin\Release\net9.0-windows\FlowMetaLicenseAdmin.exe
+```
+
+The standalone admin app reads `license-private.key` from file. Keep that key private and do not ship it with the customer app.
+
+Open the admin form:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\FlowMetaLicenseAdmin.ps1
+```
+
+Or generate from command line:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\Create-FlowMetaLicense.ps1 -MachineId "FM-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX" -Expires "2026-12-31 23:59:59"
+```
+
+Important:
+
+- Keep `license-private.key` private.
+- Do not send or commit `license-private.key`.
+- If `license-private.key` is lost or regenerated, old app builds will not accept newly generated keys unless the app public key is updated and rebuilt.
+
+## GitHub Release Update Check
+
+FlowMeta checks updates from:
+
+```text
+https://github.com/dinhquangtuy/Comment_Edit_Delete/releases/latest
+```
+
+Release rules:
+
+- Tag must use semantic version, for example `v1.0.0`, `v1.0.1`, `v1.1.0`.
+- The release should include an asset named `FlowMeta.exe`.
+- The app compares the current app version with the latest release tag.
+- If a newer release exists, the app opens the release/download link for the user.
+
+Publish customer exe:
+
+```powershell
+dotnet publish .\ToolEditDeleteCmt.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+Upload this file to GitHub Release:
+
+```text
+bin\Release\net9.0-windows\win-x64\publish\FlowMeta.exe
+```
+
+FlowMeta sử dụng license offline gắn theo máy:
+
+- App hiển thị `MachineID` nếu chưa có license hợp lệ.
+- Người dùng gửi `MachineID` cho admin.
+- Admin tạo license key kèm ngày hết hạn.
+- Người dùng dán license key vào app.
+- License được lưu mã hóa bằng Windows DPAPI tại:
+
+```text
+%LOCALAPPDATA%\FlowMeta\license.dpapi
+```
+
+Lệnh tạo license:
+
+Build/mở app admin riêng:
+
+```powershell
+dotnet build .\FlowMetaLicenseAdmin\FlowMetaLicenseAdmin.csproj -c Release
+```
+
+File app admin:
+
+```text
+FlowMetaLicenseAdmin\bin\Release\net9.0-windows\FlowMetaLicenseAdmin.exe
+```
+
+App admin đọc `license-private.key` từ file. Giữ kín private key và không gửi cùng app khách.
+
+Mở form admin:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\FlowMetaLicenseAdmin.ps1
+```
+
+Hoặc tạo bằng lệnh:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\Create-FlowMetaLicense.ps1 -MachineId "FM-XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX" -Expires "2026-12-31 23:59:59"
+```
+
+Lưu ý:
+
+- Giữ kín file `license-private.key`.
+- Không gửi hoặc commit `license-private.key`.
+- Nếu mất hoặc tạo lại `license-private.key`, các bản app cũ sẽ không nhận key mới trừ khi cập nhật public key trong app và build lại.
+
+## Kiểm Tra Cập Nhật Qua GitHub Release
+
+FlowMeta kiểm tra cập nhật từ:
+
+```text
+https://github.com/dinhquangtuy/Comment_Edit_Delete/releases/latest
+```
+
+Quy tắc release:
+
+- Tag dùng dạng version, ví dụ `v1.0.0`, `v1.0.1`, `v1.1.0`.
+- Release nên có file đính kèm tên `FlowMeta.exe`.
+- App so sánh version hiện tại với tag release mới nhất.
+- Nếu có bản mới, app mở link release/tải file để người dùng cập nhật.
+
+Publish file exe gửi khách:
+
+```powershell
+dotnet publish .\ToolEditDeleteCmt.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
+```
+
+Upload file này lên GitHub Release:
+
+```text
+bin\Release\net9.0-windows\win-x64\publish\FlowMeta.exe
+```
+
+---
+
 ## Tiếng Việt
 
 ### Yêu Cầu

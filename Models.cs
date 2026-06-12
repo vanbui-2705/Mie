@@ -30,7 +30,8 @@ public sealed class ProxyKeyState
     public int ReservedUses { get; set; }
     public string Status { get; set; } = "Stopped";
     public DateTime? LastGetIpAt { get; set; }
-    public DateTime? RefreshStartedAt { get; set; }
+    public DateTime? IpExpiresAt { get; set; }
+    public DateTime? LastCheckedAt { get; set; }
     public string LastError { get; set; } = "";
     public ProxyEndpoint? Endpoint { get; set; }
 
@@ -44,6 +45,9 @@ public sealed class ProxyEndpoint
     public string? Username { get; set; }
     public string? Password { get; set; }
     public string Display { get; set; } = "";
+    public DateTime? ExpiresAt { get; set; }
+    public string ApiStatus { get; set; } = "";
+    public string ApiMessage { get; set; } = "";
 
     public WebProxy ToWebProxy()
     {
@@ -152,6 +156,7 @@ public sealed class AppSettings
     public string GetNewProxyUrlTemplate { get; set; } = "https://api.kiotproxy.com/api/v1/proxies/new?key={apiKey}";
     public string GetCurrentProxyUrlTemplate { get; set; } = "https://api.kiotproxy.com/api/v1/proxies/current?key={apiKey}";
     public int UsesPerProxy { get; set; } = 4;
+    public int ProxyCheckIntervalSeconds { get; set; } = 5;
 }
 
 public sealed class SavedProfileState

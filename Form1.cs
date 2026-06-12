@@ -2,6 +2,9 @@ namespace ToolEditDeleteCmt;
 
 public partial class Form1 : Form
 {
+    private const string AppDisplayName = "FlowMeta";
+    private const string DefaultLicenseExpiryText = "Chưa kích hoạt";
+
     private static readonly Color AppBackColor = Color.FromArgb(225, 245, 249);
     private static readonly Color PanelBackColor = Color.White;
     private static readonly Color BorderColor = Color.FromArgb(135, 211, 225);
@@ -21,6 +24,8 @@ public partial class Form1 : Form
     private readonly SecureSettingsStore _settingsStore = new();
     private readonly ProfileManager _profileManager = new();
     private readonly ProxyManager _proxyManager = new();
+    private readonly LicenseManager _licenseManager;
+    private readonly GitHubUpdateChecker _updateChecker = new();
     private readonly CommentTaskManager _taskManager;
     private readonly Dictionary<string, DataGridViewRow> _logRowsByKey = new(StringComparer.OrdinalIgnoreCase);
     private AppSettings _settings;
@@ -65,10 +70,20 @@ public partial class Form1 : Form
     private TextBox _getNewProxyUrlTextBox = null!;
     private TextBox _getCurrentProxyUrlTextBox = null!;
     private NumericUpDown _usesPerProxyInput = null!;
+    private NumericUpDown _proxyCheckIntervalInput = null!;
     private DataGridView _proxyGrid = null!;
+    private System.Windows.Forms.Timer _proxyCountdownTimer = null!;
+    private Label _currentVersionLabel = null!;
+    private Label _updateStatusLabel = null!;
+    private Button _checkUpdateButton = null!;
+    private Button _openReleaseButton = null!;
+    private Button _downloadUpdateButton = null!;
+    private string _latestReleaseUrl = "";
+    private string _latestDownloadUrl = "";
 
-    public Form1()
+    public Form1(LicenseManager licenseManager)
     {
+        _licenseManager = licenseManager;
         _settings = _settingsStore.Load();
         _taskManager = new CommentTaskManager(
             _profileManager,
@@ -84,7 +99,7 @@ public partial class Form1 : Form
 
     private void InitializeComponent()
     {
-        Text = "Công cụ quản lý comment";
+        Text = BuildWindowTitle();
         ApplyAppIcon();
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(1180, 760);
@@ -102,7 +117,17 @@ public partial class Form1 : Form
         tabs.TabPages.Add(BuildProfileTab());
         tabs.TabPages.Add(BuildInteractionTab());
         tabs.TabPages.Add(BuildProxyTab());
+        tabs.TabPages.Add(BuildUpdateTab());
         Controls.Add(tabs);
+    }
+
+    private string BuildWindowTitle()
+    {
+        var status = _licenseManager.GetCurrentStatus();
+        var expiryText = status.IsValid && status.ExpiresAtUtc is not null
+            ? status.ExpiresAtUtc.Value.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
+            : DefaultLicenseExpiryText;
+        return $"{AppDisplayName} - Hạn sử dụng: {expiryText}";
     }
 
     private void ApplyAppIcon()
@@ -614,16 +639,16 @@ public partial class Form1 : Form
             Padding = new Padding(12),
             BackColor = AppBackColor
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 238));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 274));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var inputs = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 5, BackColor = AppBackColor };
+        var inputs = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 6, BackColor = AppBackColor };
         inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
         inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
         inputs.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        for (var i = 0; i < 5; i++)
+        for (var i = 0; i < 6; i++)
         {
             inputs.RowStyles.Add(new RowStyle(SizeType.Absolute, i == 1 ? 86 : 36));
         }
@@ -665,6 +690,11 @@ public partial class Form1 : Form
         inputs.SetColumnSpan(_getCurrentProxyUrlTextBox, 3);
         inputs.Controls.Add(_getCurrentProxyUrlTextBox, 1, 3);
 
+        inputs.Controls.Add(CreateLabel("Kiểm tra Proxy mỗi (giây):"), 0, 4);
+        _proxyCheckIntervalInput = new NumericUpDown { Dock = DockStyle.Left, Minimum = 1, Maximum = 3600, Value = 5, Width = 90 };
+        StyleNumeric(_proxyCheckIntervalInput);
+        inputs.Controls.Add(_proxyCheckIntervalInput, 1, 4);
+
         var hint = new Label
         {
             Text = "Dùng placeholder {apiKey}. Dữ liệu nhạy cảm được lưu bằng Windows DPAPI theo user hiện tại.",
@@ -674,7 +704,7 @@ public partial class Form1 : Form
             BackColor = AppBackColor
         };
         inputs.SetColumnSpan(hint, 4);
-        inputs.Controls.Add(hint, 0, 4);
+        inputs.Controls.Add(hint, 0, 5);
         root.Controls.Add(inputs, 0, 0);
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, BackColor = AppBackColor, Padding = new Padding(0, 5, 0, 0) };
@@ -711,10 +741,95 @@ public partial class Form1 : Form
         _proxyGrid.Columns.Add("Reserved", "Đang giữ");
         _proxyGrid.Columns.Add("Status", "Trạng thái");
         _proxyGrid.Columns.Add("LastGet", "Lần lấy IP gần nhất");
+        _proxyGrid.Columns.Add("ExpiresIn", "Còn hạn IP");
+        _proxyGrid.Columns.Add("LastCheck", "Lần kiểm tra gần nhất");
         _proxyGrid.Columns.Add("Error", "Lỗi gần nhất");
-        SetColumnWidths(_proxyGrid, 55, 180, 220, 100, 90, 120, 170, 420);
+        SetColumnWidths(_proxyGrid, 55, 180, 220, 100, 90, 120, 170, 120, 170, 420);
         root.Controls.Add(_proxyGrid, 0, 2);
         UpdateProxyButtons();
+
+        tab.Controls.Add(root);
+        return tab;
+    }
+
+    private TabPage BuildUpdateTab()
+    {
+        var tab = new TabPage("Cập nhật") { BackColor = AppBackColor };
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 5,
+            Padding = new Padding(16),
+            BackColor = AppBackColor
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var title = new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = "Cập nhật FlowMeta từ GitHub Release",
+            ForeColor = TextColor,
+            Font = new Font("Segoe UI Semibold", 14F),
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        root.Controls.Add(title, 0, 0);
+
+        _currentVersionLabel = new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = $"Phiên bản hiện tại: {_updateChecker.CurrentVersionText}",
+            ForeColor = TextColor,
+            Font = UiFontBold,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        root.Controls.Add(_currentVersionLabel, 0, 1);
+
+        var repoLabel = new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = $"Repo cập nhật: {_updateChecker.RepositoryUrl}",
+            ForeColor = TextColor,
+            Font = UiFont,
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        root.Controls.Add(repoLabel, 0, 2);
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            BackColor = AppBackColor,
+            Padding = new Padding(0, 8, 0, 0)
+        };
+        _checkUpdateButton = CreateButton("Kiểm tra cập nhật", 160);
+        _checkUpdateButton.Click += async (_, _) => await CheckForUpdatesAsync();
+        _openReleaseButton = CreateButton("Mở trang release", 150);
+        _openReleaseButton.Enabled = false;
+        _openReleaseButton.Click += (_, _) => GitHubUpdateChecker.OpenUrl(_latestReleaseUrl);
+        _downloadUpdateButton = CreateButton("Tải bản mới", 130);
+        _downloadUpdateButton.Enabled = false;
+        _downloadUpdateButton.Click += (_, _) => GitHubUpdateChecker.OpenUrl(
+            string.IsNullOrWhiteSpace(_latestDownloadUrl) ? _latestReleaseUrl : _latestDownloadUrl);
+        buttons.Controls.AddRange([_checkUpdateButton, _openReleaseButton, _downloadUpdateButton]);
+        root.Controls.Add(buttons, 0, 3);
+
+        _updateStatusLabel = new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = "Bấm Kiểm tra cập nhật để xem bản mới nhất trên GitHub.",
+            ForeColor = PrimaryDarkColor,
+            Font = UiFontBold,
+            TextAlign = ContentAlignment.TopLeft,
+            BackColor = PanelBackColor,
+            BorderStyle = BorderStyle.FixedSingle,
+            Padding = new Padding(10)
+        };
+        root.Controls.Add(_updateStatusLabel, 0, 4);
 
         tab.Controls.Add(root);
         return tab;
@@ -730,6 +845,10 @@ public partial class Form1 : Form
         _taskManager.LogAdded += entry => Ui(() => AddLog(entry));
         _taskManager.StatsChanged += stats => Ui(() => UpdateStats(stats));
         _taskManager.ProfileStatusChanged += (uid, status, error) => Ui(() => UpdateProfileStatusRow(uid, status, error));
+
+        _proxyCountdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        _proxyCountdownTimer.Tick += (_, _) => UpdateProxyExpiryCountdown();
+        _proxyCountdownTimer.Start();
     }
 
     private void UpdateProxyButtons()
@@ -741,6 +860,59 @@ public partial class Form1 : Form
 
         SetButtonRunning(_startProxyButton, _proxyManager.IsStarted);
         _stopProxyButton.Enabled = _proxyManager.IsStarted;
+    }
+
+    private async Task CheckForUpdatesAsync()
+    {
+        _checkUpdateButton.Enabled = false;
+        _openReleaseButton.Enabled = false;
+        _downloadUpdateButton.Enabled = false;
+        _updateStatusLabel.ForeColor = PrimaryDarkColor;
+        _updateStatusLabel.Text = "Đang kiểm tra GitHub Release...";
+
+        try
+        {
+            var result = await _updateChecker.CheckAsync();
+            _latestReleaseUrl = result.ReleaseUrl;
+            _latestDownloadUrl = result.DownloadUrl ?? "";
+            _openReleaseButton.Enabled = !string.IsNullOrWhiteSpace(_latestReleaseUrl);
+            _downloadUpdateButton.Enabled = result.HasUpdate &&
+                                            (!string.IsNullOrWhiteSpace(_latestDownloadUrl) ||
+                                             !string.IsNullOrWhiteSpace(_latestReleaseUrl));
+            _updateStatusLabel.ForeColor = result.Success
+                ? result.HasUpdate ? WarningColor : SuccessColor
+                : DangerColor;
+            _updateStatusLabel.Text = result.Message;
+
+            if (result.HasUpdate)
+            {
+                var confirm = MessageBox.Show(
+                    this,
+                    $"{result.Message}{Environment.NewLine}Bạn có muốn mở trang tải bản mới không?",
+                    "Cập nhật FlowMeta",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information);
+                if (confirm == DialogResult.Yes)
+                {
+                    GitHubUpdateChecker.OpenUrl(string.IsNullOrWhiteSpace(_latestDownloadUrl)
+                        ? _latestReleaseUrl
+                        : _latestDownloadUrl);
+                }
+            }
+            else
+            {
+                MessageBox.Show(this, result.Message, "Cập nhật FlowMeta", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            _updateStatusLabel.ForeColor = DangerColor;
+            _updateStatusLabel.Text = $"Kiểm tra cập nhật lỗi: {ex.Message}";
+        }
+        finally
+        {
+            _checkUpdateButton.Enabled = true;
+        }
     }
 
     private void LoadSettingsIntoUi()
@@ -785,6 +957,7 @@ public partial class Form1 : Form
         _getNewProxyUrlTextBox.Text = _settings.GetNewProxyUrlTemplate;
         _getCurrentProxyUrlTextBox.Text = _settings.GetCurrentProxyUrlTemplate;
         _usesPerProxyInput.Value = Math.Clamp(_settings.UsesPerProxy, 1, 100);
+        _proxyCheckIntervalInput.Value = Math.Clamp(_settings.ProxyCheckIntervalSeconds <= 0 ? 5 : _settings.ProxyCheckIntervalSeconds, (int)_proxyCheckIntervalInput.Minimum, (int)_proxyCheckIntervalInput.Maximum);
         UpdateInteractionCounts();
     }
 
@@ -819,9 +992,11 @@ public partial class Form1 : Form
             GetCurrentProxyUrlTemplate = string.IsNullOrWhiteSpace(_getCurrentProxyUrlTextBox.Text)
                 ? new AppSettings().GetCurrentProxyUrlTemplate
                 : _getCurrentProxyUrlTextBox.Text.Trim(),
-            UsesPerProxy = (int)_usesPerProxyInput.Value
+            UsesPerProxy = (int)_usesPerProxyInput.Value,
+            ProxyCheckIntervalSeconds = (int)_proxyCheckIntervalInput.Value
         };
         _settingsStore.Save(_settings);
+        _proxyManager.UpdateSettings(_settings);
 
         if (showMessage)
         {
@@ -1431,6 +1606,7 @@ public partial class Form1 : Form
         {
             "Stopped" => "Đã dừng",
             "Starting" => "Đang khởi động",
+            "GettingNew" => "Đang lấy IP mới",
             "Refreshing" => "Đang lấy IP mới",
             "Waiting" => "Đang chờ",
             "Ready" => "Sẵn sàng",
@@ -1492,8 +1668,49 @@ public partial class Form1 : Form
                 proxy.ReservedUses,
                 DisplayProxyStatus(proxy.Status),
                 proxy.LastGetIpAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
+                FormatProxyIpExpiresIn(proxy.IpExpiresAt),
+                proxy.LastCheckedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
                 proxy.LastError);
         }
+    }
+
+    private void UpdateProxyExpiryCountdown()
+    {
+        if (_proxyGrid is null || _proxyGrid.Rows.Count == 0)
+        {
+            return;
+        }
+
+        var proxiesByIndex = _proxyManager.Snapshot()
+            .ToDictionary(proxy => proxy.Index);
+        foreach (DataGridViewRow row in _proxyGrid.Rows)
+        {
+            if (!int.TryParse(row.Cells["Index"].Value?.ToString(), out var index) ||
+                !proxiesByIndex.TryGetValue(index, out var proxy))
+            {
+                continue;
+            }
+
+            row.Cells["ExpiresIn"].Value = FormatProxyIpExpiresIn(proxy.IpExpiresAt);
+        }
+    }
+
+    private static string FormatProxyIpExpiresIn(DateTime? expiresAt)
+    {
+        if (expiresAt is null)
+        {
+            return "";
+        }
+
+        var remaining = expiresAt.Value - DateTime.Now;
+        if (remaining <= TimeSpan.Zero)
+        {
+            return "Hết hạn";
+        }
+
+        return remaining.TotalHours >= 1
+            ? $"{(int)remaining.TotalHours:00}:{remaining.Minutes:00}:{remaining.Seconds:00}"
+            : $"{remaining.Minutes:00}:{remaining.Seconds:00}";
     }
 
     private void AddLog(TaskLogEntry entry)
@@ -1831,6 +2048,8 @@ public partial class Form1 : Form
         }
 
         SaveAllSettings(showMessage: false);
+        _proxyCountdownTimer?.Stop();
+        _proxyCountdownTimer?.Dispose();
         _taskManager.Stop();
         _proxyManager.Stop();
         base.OnFormClosing(e);

@@ -15,6 +15,7 @@ build-check*/
 *.log
 *.tmp
 *.temp
+tmp/
 
 # OS files
 Thumbs.db

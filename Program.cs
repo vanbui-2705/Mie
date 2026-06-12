@@ -28,7 +28,13 @@ static class Program
                 return;
             }
         };
-        Application.Run(new Form1());
+        var licenseManager = new LicenseManager();
+        if (!LicenseDialog.EnsureActivated(licenseManager))
+        {
+            return;
+        }
+
+        Application.Run(new Form1(licenseManager));
 
     }
 
