@@ -759,13 +759,12 @@ public partial class Form1 : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 4,
             Padding = new Padding(16),
             BackColor = AppBackColor
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -789,16 +788,6 @@ public partial class Form1 : Form
         };
         root.Controls.Add(_currentVersionLabel, 0, 1);
 
-        var repoLabel = new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = $"Repo cập nhật: {_updateChecker.RepositoryUrl}",
-            ForeColor = TextColor,
-            Font = UiFont,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        root.Controls.Add(repoLabel, 0, 2);
-
         var buttons = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -816,7 +805,7 @@ public partial class Form1 : Form
         _downloadUpdateButton.Click += (_, _) => GitHubUpdateChecker.OpenUrl(
             string.IsNullOrWhiteSpace(_latestDownloadUrl) ? _latestReleaseUrl : _latestDownloadUrl);
         buttons.Controls.AddRange([_checkUpdateButton, _openReleaseButton, _downloadUpdateButton]);
-        root.Controls.Add(buttons, 0, 3);
+        root.Controls.Add(buttons, 0, 2);
 
         _updateStatusLabel = new Label
         {
@@ -829,7 +818,7 @@ public partial class Form1 : Form
             BorderStyle = BorderStyle.FixedSingle,
             Padding = new Padding(10)
         };
-        root.Controls.Add(_updateStatusLabel, 0, 4);
+        root.Controls.Add(_updateStatusLabel, 0, 3);
 
         tab.Controls.Add(root);
         return tab;

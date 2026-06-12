@@ -7,7 +7,7 @@ namespace ToolEditDeleteCmt;
 public sealed class GitHubUpdateChecker
 {
     private const string Owner = "dinhquangtuy";
-    private const string Repo = "Comment_Edit_Delete";
+    private const string Repo = "FlowMeta_Release";
     private static readonly Uri LatestReleaseUri = new($"https://api.github.com/repos/{Owner}/{Repo}/releases/latest");
 
     public string CurrentVersionText => GetCurrentVersion().ToString();

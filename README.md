@@ -254,7 +254,7 @@ Important:
 FlowMeta checks updates from:
 
 ```text
-https://github.com/dinhquangtuy/Comment_Edit_Delete/releases/latest
+https://github.com/dinhquangtuy/FlowMeta_Release/releases/latest
 ```
 
 Release rules:
@@ -327,7 +327,7 @@ Lưu ý:
 FlowMeta kiểm tra cập nhật từ:
 
 ```text
-https://github.com/dinhquangtuy/Comment_Edit_Delete/releases/latest
+https://github.com/dinhquangtuy/FlowMeta_Release/releases/latest
 ```
 
 Quy tắc release:
