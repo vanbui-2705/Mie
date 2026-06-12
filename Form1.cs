@@ -5,12 +5,12 @@ public partial class Form1 : Form
     private const string AppDisplayName = "FlowMeta";
     private const string DefaultLicenseExpiryText = "Chưa kích hoạt";
 
-    private static readonly Color AppBackColor = Color.FromArgb(225, 245, 249);
+    private static readonly Color AppBackColor = Color.FromArgb(232, 241, 255);
     private static readonly Color PanelBackColor = Color.White;
-    private static readonly Color BorderColor = Color.FromArgb(135, 211, 225);
-    private static readonly Color PrimaryColor = Color.FromArgb(0, 174, 239);
-    private static readonly Color PrimaryDarkColor = Color.FromArgb(0, 133, 190);
-    private static readonly Color PrimarySoftColor = Color.FromArgb(196, 240, 248);
+    private static readonly Color BorderColor = Color.FromArgb(147, 197, 253);
+    private static readonly Color PrimaryColor = Color.FromArgb(8, 102, 255);
+    private static readonly Color PrimaryDarkColor = Color.FromArgb(5, 80, 200);
+    private static readonly Color PrimarySoftColor = Color.FromArgb(219, 234, 254);
     private static readonly Color TabBackColor = Color.FromArgb(246, 246, 246);
     private static readonly Color TabSelectedColor = AppBackColor;
     private static readonly Color SuccessColor = Color.FromArgb(22, 163, 74);
@@ -117,10 +117,15 @@ public partial class Form1 : Form
     private string BuildWindowTitle()
     {
         var status = _licenseManager.GetCurrentStatus();
-        var expiryText = status.IsValid && status.ExpiresAtUtc is not null
-            ? status.ExpiresAtUtc.Value.ToLocalTime().ToString("dd/MM/yyyy HH:mm")
-            : DefaultLicenseExpiryText;
-        return $"{AppDisplayName} - Hạn sử dụng: {expiryText}";
+        if (!status.IsValid || status.ExpiresAtUtc is null)
+        {
+            return $"{AppDisplayName} - Hạn sử dụng: {DefaultLicenseExpiryText}";
+        }
+
+        var expiry = status.ExpiresAtUtc.Value.ToLocalTime();
+        var remaining = expiry - DateTimeOffset.Now;
+        var remainingDays = Math.Max(0, (int)Math.Ceiling(remaining.TotalDays));
+        return $"{AppDisplayName} - Hạn sử dụng đến {expiry:dd/MM/yyyy} - còn {remainingDays} ngày";
     }
 
     private void ApplyAppIcon()
@@ -1417,10 +1422,12 @@ public partial class Form1 : Form
         var statusColor = GetProfileStatusColor(status);
         var backgroundColor = GetProfileStatusBackColor(status);
         row.DefaultCellStyle.BackColor = backgroundColor;
-        row.DefaultCellStyle.SelectionBackColor = ControlPaint.Dark(backgroundColor);
+        row.DefaultCellStyle.SelectionBackColor = ControlPaint.Dark(backgroundColor, 0.25F);
+        row.DefaultCellStyle.SelectionForeColor = Color.White;
         row.Cells["Status"].Style.ForeColor = statusColor;
         row.Cells["Status"].Style.Font = UiFontBold;
         row.Cells["Error"].Style.ForeColor = statusColor;
+        row.Cells["Error"].Style.Font = UiFontBold;
     }
 
     private static Color GetProfileStatusColor(string status)
@@ -1450,20 +1457,20 @@ public partial class Form1 : Form
     {
         if (status.Contains("Token out", StringComparison.OrdinalIgnoreCase))
         {
-            return Color.FromArgb(254, 243, 199);
+            return Color.FromArgb(253, 224, 135);
         }
 
         if (status.Contains("Live", StringComparison.OrdinalIgnoreCase) ||
             status.Contains("Sống", StringComparison.OrdinalIgnoreCase))
         {
-            return Color.FromArgb(220, 252, 231);
+            return Color.FromArgb(187, 247, 208);
         }
 
         if (status.Contains("Die", StringComparison.OrdinalIgnoreCase) ||
             status.Contains("Checkpoint", StringComparison.OrdinalIgnoreCase) ||
             status.Contains("Chết", StringComparison.OrdinalIgnoreCase))
         {
-            return Color.FromArgb(254, 226, 226);
+            return Color.FromArgb(254, 202, 202);
         }
 
         return PanelBackColor;
@@ -1777,29 +1784,33 @@ public partial class Form1 : Form
     private static void ApplyLogRowStyle(DataGridViewRow row)
     {
         var status = row.Cells["Status"].Value?.ToString() ?? "";
-        var color = status switch
+        var (color, backgroundColor) = status switch
         {
             var value when value.Contains("Thanh cong", StringComparison.OrdinalIgnoreCase) ||
-                           value.Contains("Thành công", StringComparison.OrdinalIgnoreCase) => SuccessColor,
+                           value.Contains("Thành công", StringComparison.OrdinalIgnoreCase) => (SuccessColor, Color.FromArgb(187, 247, 208)),
             var value when value.Contains("That bai", StringComparison.OrdinalIgnoreCase) ||
-                           value.Contains("Thất bại", StringComparison.OrdinalIgnoreCase) => DangerColor,
+                           value.Contains("Thất bại", StringComparison.OrdinalIgnoreCase) => (DangerColor, Color.FromArgb(254, 202, 202)),
             var value when value.Contains("Token out", StringComparison.OrdinalIgnoreCase) ||
-                           value.Contains("Token hết hạn", StringComparison.OrdinalIgnoreCase) => WarningColor,
+                           value.Contains("Token hết hạn", StringComparison.OrdinalIgnoreCase) => (WarningColor, Color.FromArgb(253, 224, 135)),
             var value when value.Contains("Die", StringComparison.OrdinalIgnoreCase) ||
-                           value.Contains("Chết", StringComparison.OrdinalIgnoreCase) => DangerColor,
-            var value when value.Contains("Checkpoint", StringComparison.OrdinalIgnoreCase) => DangerColor,
+                           value.Contains("Chết", StringComparison.OrdinalIgnoreCase) => (DangerColor, Color.FromArgb(254, 202, 202)),
+            var value when value.Contains("Checkpoint", StringComparison.OrdinalIgnoreCase) => (DangerColor, Color.FromArgb(254, 202, 202)),
             var value when value.Contains("Dang cho proxy", StringComparison.OrdinalIgnoreCase) ||
-                           value.Contains("Đang chờ proxy", StringComparison.OrdinalIgnoreCase) => WarningColor,
+                           value.Contains("Đang chờ proxy", StringComparison.OrdinalIgnoreCase) => (WarningColor, Color.FromArgb(253, 224, 135)),
             var value when value.Contains("Dang chay", StringComparison.OrdinalIgnoreCase) ||
-                           value.Contains("Đang chạy", StringComparison.OrdinalIgnoreCase) => PrimaryDarkColor,
+                           value.Contains("Đang chạy", StringComparison.OrdinalIgnoreCase) => (PrimaryDarkColor, Color.FromArgb(191, 219, 254)),
             var value when value.Contains("Cho chay", StringComparison.OrdinalIgnoreCase) ||
-                           value.Contains("Chờ chạy", StringComparison.OrdinalIgnoreCase) => Color.FromArgb(75, 85, 99),
-            _ => TextColor
+                           value.Contains("Chờ chạy", StringComparison.OrdinalIgnoreCase) => (Color.FromArgb(55, 65, 81), Color.FromArgb(229, 231, 235)),
+            _ => (TextColor, PanelBackColor)
         };
 
+        row.DefaultCellStyle.BackColor = backgroundColor;
+        row.DefaultCellStyle.SelectionBackColor = ControlPaint.Dark(backgroundColor, 0.25F);
+        row.DefaultCellStyle.SelectionForeColor = Color.White;
         row.DefaultCellStyle.ForeColor = TextColor;
         row.Cells["Status"].Style.ForeColor = color;
         row.Cells["Status"].Style.Font = UiFontBold;
+        row.Cells["Error"].Style.ForeColor = color;
     }
 
     private void UpdateStats(TaskStats stats)
@@ -1836,10 +1847,10 @@ public partial class Form1 : Form
         grid.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
         grid.DefaultCellStyle.BackColor = PanelBackColor;
         grid.DefaultCellStyle.ForeColor = TextColor;
-        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(165, 243, 252);
-        grid.DefaultCellStyle.SelectionForeColor = Color.FromArgb(21, 94, 117);
+        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(37, 99, 235);
+        grid.DefaultCellStyle.SelectionForeColor = Color.White;
         grid.DefaultCellStyle.Font = UiFont;
-        grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
+        grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(239, 246, 255);
         grid.ColumnHeadersDefaultCellStyle.BackColor = PrimaryDarkColor;
         grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
         grid.ColumnHeadersDefaultCellStyle.Font = UiFontBold;

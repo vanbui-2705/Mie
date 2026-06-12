@@ -73,9 +73,9 @@ function New-FlowMetaLicense {
 
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
-$primary = [System.Drawing.Color]::FromArgb(0, 174, 239)
+$primary = [System.Drawing.Color]::FromArgb(8, 102, 255)
 $danger = [System.Drawing.Color]::FromArgb(220, 38, 38)
-$back = [System.Drawing.Color]::FromArgb(225, 245, 249)
+$back = [System.Drawing.Color]::FromArgb(232, 241, 255)
 $text = [System.Drawing.Color]::FromArgb(17, 24, 39)
 
 $form = New-Object System.Windows.Forms.Form

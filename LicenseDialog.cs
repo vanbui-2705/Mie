@@ -2,8 +2,8 @@ namespace ToolEditDeleteCmt;
 
 public sealed class LicenseDialog : Form
 {
-    private static readonly Color AppBackColor = Color.FromArgb(225, 245, 249);
-    private static readonly Color PrimaryColor = Color.FromArgb(0, 174, 239);
+    private static readonly Color AppBackColor = Color.FromArgb(232, 241, 255);
+    private static readonly Color PrimaryColor = Color.FromArgb(8, 102, 255);
     private static readonly Color DangerColor = Color.FromArgb(220, 38, 38);
     private static readonly Color TextColor = Color.FromArgb(17, 24, 39);
     private static readonly Font UiFont = new("Segoe UI", 9F);
