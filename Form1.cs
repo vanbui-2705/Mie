@@ -73,13 +73,7 @@ public partial class Form1 : Form
     private NumericUpDown _proxyCheckIntervalInput = null!;
     private DataGridView _proxyGrid = null!;
     private System.Windows.Forms.Timer _proxyCountdownTimer = null!;
-    private Label _currentVersionLabel = null!;
-    private Label _updateStatusLabel = null!;
-    private Button _checkUpdateButton = null!;
-    private Button _openReleaseButton = null!;
-    private Button _downloadUpdateButton = null!;
-    private string _latestReleaseUrl = "";
-    private string _latestDownloadUrl = "";
+    private bool _skipExitConfirm;
 
     public Form1(LicenseManager licenseManager)
     {
@@ -117,7 +111,6 @@ public partial class Form1 : Form
         tabs.TabPages.Add(BuildProfileTab());
         tabs.TabPages.Add(BuildInteractionTab());
         tabs.TabPages.Add(BuildProxyTab());
-        tabs.TabPages.Add(BuildUpdateTab());
         Controls.Add(tabs);
     }
 
@@ -339,6 +332,8 @@ public partial class Form1 : Form
         loadButton.Click += (_, _) => LoadProfilesFromInput();
         _checkTokensButton = CreateButton("Check token", 120);
         _checkTokensButton.Click += async (_, _) => await CheckTokensAsync();
+        var updateButton = CreateButton("Cập nhật", 110);
+        updateButton.Click += (_, _) => ShowUpdateDialog();
         var saveDataButton = CreateButton("Lưu dữ liệu", 110);
         saveDataButton.Click += (_, _) => SaveAllSettings(showMessage: true);
         var deleteCheckedButton = CreateButton("Xóa đã tích", 120, DangerColor);
@@ -351,7 +346,7 @@ public partial class Form1 : Form
             RefreshProfileGrid();
             SaveAllSettings(showMessage: false);
         };
-        buttons.Controls.AddRange([importButton, loadButton, _checkTokensButton, saveDataButton, deleteCheckedButton, clearButton]);
+        buttons.Controls.AddRange([importButton, loadButton, _checkTokensButton, updateButton, saveDataButton, deleteCheckedButton, clearButton]);
         root.Controls.Add(buttons, 0, 1);
 
         _profileGrid = CreateGrid();
@@ -752,78 +747,6 @@ public partial class Form1 : Form
         return tab;
     }
 
-    private TabPage BuildUpdateTab()
-    {
-        var tab = new TabPage("Cập nhật") { BackColor = AppBackColor };
-        var root = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 4,
-            Padding = new Padding(16),
-            BackColor = AppBackColor
-        };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-        var title = new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "Cập nhật FlowMeta từ GitHub Release",
-            ForeColor = TextColor,
-            Font = new Font("Segoe UI Semibold", 14F),
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        root.Controls.Add(title, 0, 0);
-
-        _currentVersionLabel = new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = $"Phiên bản hiện tại: {_updateChecker.CurrentVersionText}",
-            ForeColor = TextColor,
-            Font = UiFontBold,
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        root.Controls.Add(_currentVersionLabel, 0, 1);
-
-        var buttons = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            BackColor = AppBackColor,
-            Padding = new Padding(0, 8, 0, 0)
-        };
-        _checkUpdateButton = CreateButton("Kiểm tra cập nhật", 160);
-        _checkUpdateButton.Click += async (_, _) => await CheckForUpdatesAsync();
-        _openReleaseButton = CreateButton("Mở trang release", 150);
-        _openReleaseButton.Enabled = false;
-        _openReleaseButton.Click += (_, _) => GitHubUpdateChecker.OpenUrl(_latestReleaseUrl);
-        _downloadUpdateButton = CreateButton("Tải bản mới", 130);
-        _downloadUpdateButton.Enabled = false;
-        _downloadUpdateButton.Click += (_, _) => GitHubUpdateChecker.OpenUrl(
-            string.IsNullOrWhiteSpace(_latestDownloadUrl) ? _latestReleaseUrl : _latestDownloadUrl);
-        buttons.Controls.AddRange([_checkUpdateButton, _openReleaseButton, _downloadUpdateButton]);
-        root.Controls.Add(buttons, 0, 2);
-
-        _updateStatusLabel = new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "Bấm Kiểm tra cập nhật để xem bản mới nhất trên GitHub.",
-            ForeColor = PrimaryDarkColor,
-            Font = UiFontBold,
-            TextAlign = ContentAlignment.TopLeft,
-            BackColor = PanelBackColor,
-            BorderStyle = BorderStyle.FixedSingle,
-            Padding = new Padding(10)
-        };
-        root.Controls.Add(_updateStatusLabel, 0, 3);
-
-        tab.Controls.Add(root);
-        return tab;
-    }
-
     private void WireEvents()
     {
         _proxyManager.StateChanged += () => Ui(() =>
@@ -851,56 +774,13 @@ public partial class Form1 : Form
         _stopProxyButton.Enabled = _proxyManager.IsStarted;
     }
 
-    private async Task CheckForUpdatesAsync()
+    private void ShowUpdateDialog()
     {
-        _checkUpdateButton.Enabled = false;
-        _openReleaseButton.Enabled = false;
-        _downloadUpdateButton.Enabled = false;
-        _updateStatusLabel.ForeColor = PrimaryDarkColor;
-        _updateStatusLabel.Text = "Đang kiểm tra GitHub Release...";
-
-        try
+        using var dialog = new UpdateDialog(_updateChecker);
+        if (dialog.ShowDialog(this) == DialogResult.OK)
         {
-            var result = await _updateChecker.CheckAsync();
-            _latestReleaseUrl = result.ReleaseUrl;
-            _latestDownloadUrl = result.DownloadUrl ?? "";
-            _openReleaseButton.Enabled = !string.IsNullOrWhiteSpace(_latestReleaseUrl);
-            _downloadUpdateButton.Enabled = result.HasUpdate &&
-                                            (!string.IsNullOrWhiteSpace(_latestDownloadUrl) ||
-                                             !string.IsNullOrWhiteSpace(_latestReleaseUrl));
-            _updateStatusLabel.ForeColor = result.Success
-                ? result.HasUpdate ? WarningColor : SuccessColor
-                : DangerColor;
-            _updateStatusLabel.Text = result.Message;
-
-            if (result.HasUpdate)
-            {
-                var confirm = MessageBox.Show(
-                    this,
-                    $"{result.Message}{Environment.NewLine}Bạn có muốn mở trang tải bản mới không?",
-                    "Cập nhật FlowMeta",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Information);
-                if (confirm == DialogResult.Yes)
-                {
-                    GitHubUpdateChecker.OpenUrl(string.IsNullOrWhiteSpace(_latestDownloadUrl)
-                        ? _latestReleaseUrl
-                        : _latestDownloadUrl);
-                }
-            }
-            else
-            {
-                MessageBox.Show(this, result.Message, "Cập nhật FlowMeta", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-        }
-        catch (Exception ex)
-        {
-            _updateStatusLabel.ForeColor = DangerColor;
-            _updateStatusLabel.Text = $"Kiểm tra cập nhật lỗi: {ex.Message}";
-        }
-        finally
-        {
-            _checkUpdateButton.Enabled = true;
+            _skipExitConfirm = true;
+            Close();
         }
     }
 
@@ -2022,6 +1902,17 @@ public partial class Form1 : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        if (_skipExitConfirm)
+        {
+            SaveAllSettings(showMessage: false);
+            _proxyCountdownTimer?.Stop();
+            _proxyCountdownTimer?.Dispose();
+            _taskManager.Stop();
+            _proxyManager.Stop();
+            base.OnFormClosing(e);
+            return;
+        }
+
         var confirmMessage = _taskManager.IsRunning || _proxyManager.IsStarted
             ? "Tool đang có tác vụ hoặc proxy đang chạy. Bạn có chắc muốn thoát? Tác vụ hiện tại sẽ bị dừng."
             : "Bạn có chắc muốn thoát ứng dụng?";

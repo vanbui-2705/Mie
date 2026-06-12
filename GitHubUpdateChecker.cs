@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace ToolEditDeleteCmt;
 
@@ -8,58 +9,98 @@ public sealed class GitHubUpdateChecker
 {
     private const string Owner = "dinhquangtuy";
     private const string Repo = "FlowMeta_Release";
-    private static readonly Uri LatestReleaseUri = new($"https://api.github.com/repos/{Owner}/{Repo}/releases/latest");
+    private static readonly Uri ReleasesUri = new($"https://api.github.com/repos/{Owner}/{Repo}/releases?per_page=20");
 
-    public string CurrentVersionText => GetCurrentVersion().ToString();
-    public string RepositoryUrl => $"https://github.com/{Owner}/{Repo}";
+    public Version CurrentVersion => GetCurrentVersion();
+    public string CurrentVersionText => CurrentVersion.ToString();
 
-    public async Task<UpdateCheckResult> CheckAsync(CancellationToken cancellationToken = default)
+    public async Task<UpdateHistoryResult> GetReleaseHistoryAsync(CancellationToken cancellationToken = default)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("FlowMeta-Updater/1.0");
-        client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-
-        using var response = await client.GetAsync(LatestReleaseUri, cancellationToken);
-        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-        {
-            return UpdateCheckResult.NoRelease("Chưa có GitHub Release nào cho repo này.");
-        }
-
+        using var client = CreateClient();
+        using var response = await client.GetAsync(ReleasesUri, cancellationToken);
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
-            return UpdateCheckResult.Error($"GitHub API lỗi {(int)response.StatusCode}: {ExtractGitHubMessage(json)}");
+            return UpdateHistoryResult.Error($"GitHub API lỗi {(int)response.StatusCode}: {ExtractGitHubMessage(json)}");
         }
 
-        var release = JsonSerializer.Deserialize<GitHubReleaseResponse>(json, new JsonSerializerOptions
+        var releases = JsonSerializer.Deserialize<List<GitHubReleaseResponse>>(json) ?? [];
+        if (releases.Count == 0)
         {
-            PropertyNameCaseInsensitive = true
-        });
-        if (release is null || string.IsNullOrWhiteSpace(release.TagName))
-        {
-            return UpdateCheckResult.Error("Không đọc được thông tin release mới nhất.");
+            return UpdateHistoryResult.Success([], null, "Chưa có bản phát hành nào trên GitHub.");
         }
 
-        var currentVersion = GetCurrentVersion();
-        var latestVersion = ParseVersion(release.TagName);
-        if (latestVersion <= currentVersion)
+        var current = CurrentVersion;
+        var items = releases
+            .Where(release => !string.IsNullOrWhiteSpace(release.TagName))
+            .Select(release =>
+            {
+                var asset = release.Assets
+                    .FirstOrDefault(item => item.Name.Equals("FlowMeta.exe", StringComparison.OrdinalIgnoreCase)) ??
+                            release.Assets.FirstOrDefault(item => item.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+                var version = ParseVersion(release.TagName);
+                return new UpdateReleaseInfo(
+                    release.TagName,
+                    version,
+                    release.Name,
+                    release.Body,
+                    release.HtmlUrl,
+                    asset?.BrowserDownloadUrl ?? "",
+                    release.PublishedAt,
+                    version > current);
+            })
+            .OrderByDescending(item => item.Version)
+            .ToList();
+
+        var latest = items.FirstOrDefault(item => item.IsNewerThanCurrent);
+        var message = latest is null
+            ? $"Bạn đang dùng bản mới nhất: {current}."
+            : $"Có bản mới {latest.TagName}. Bản hiện tại: {current}.";
+        return UpdateHistoryResult.Success(items, latest, message);
+    }
+
+    public async Task<string> DownloadUpdateAsync(
+        UpdateReleaseInfo release,
+        IProgress<int>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(release.DownloadUrl))
         {
-            return UpdateCheckResult.UpToDate(
-                release.TagName,
-                release.HtmlUrl,
-                $"Đang dùng bản mới nhất: {currentVersion}.");
+            throw new InvalidOperationException("Release này chưa có file FlowMeta.exe.");
         }
 
-        var asset = release.Assets
-            .FirstOrDefault(item => item.Name.Equals("FlowMeta.exe", StringComparison.OrdinalIgnoreCase)) ??
-                    release.Assets.FirstOrDefault(item => item.Name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+        var tempDir = Path.Combine(Path.GetTempPath(), "FlowMetaUpdate");
+        Directory.CreateDirectory(tempDir);
+        var outputPath = Path.Combine(tempDir, "FlowMeta.exe");
 
-        return UpdateCheckResult.UpdateAvailable(
-            release.TagName,
-            release.Name,
-            release.HtmlUrl,
-            asset?.BrowserDownloadUrl,
-            $"Có bản mới {release.TagName}. Bản hiện tại: {currentVersion}.");
+        using var client = CreateClient();
+        using var response = await client.GetAsync(release.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var total = response.Content.Headers.ContentLength;
+        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken);
+        await using var output = File.Create(outputPath);
+
+        var buffer = new byte[1024 * 128];
+        long downloaded = 0;
+        while (true)
+        {
+            var read = await input.ReadAsync(buffer, cancellationToken);
+            if (read <= 0)
+            {
+                break;
+            }
+
+            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            downloaded += read;
+            if (total is > 0)
+            {
+                progress?.Report((int)Math.Clamp(downloaded * 100 / total.Value, 0, 100));
+            }
+        }
+
+        progress?.Report(100);
+        return outputPath;
     }
 
     public static void OpenUrl(string url)
@@ -70,6 +111,14 @@ public sealed class GitHubUpdateChecker
         }
 
         Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+    }
+
+    private static HttpClient CreateClient()
+    {
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("FlowMeta-Updater/1.0");
+        client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        return client;
     }
 
     private static Version GetCurrentVersion()
@@ -125,50 +174,61 @@ public sealed class GitHubUpdateChecker
 
     private sealed class GitHubReleaseResponse
     {
+        [JsonPropertyName("tag_name")]
         public string TagName { get; set; } = "";
+
+        [JsonPropertyName("name")]
         public string Name { get; set; } = "";
+
+        [JsonPropertyName("body")]
+        public string Body { get; set; } = "";
+
+        [JsonPropertyName("html_url")]
         public string HtmlUrl { get; set; } = "";
+
+        [JsonPropertyName("published_at")]
+        public DateTimeOffset PublishedAt { get; set; }
+
+        [JsonPropertyName("assets")]
         public List<GitHubReleaseAsset> Assets { get; set; } = [];
     }
 
     private sealed class GitHubReleaseAsset
     {
+        [JsonPropertyName("name")]
         public string Name { get; set; } = "";
+
+        [JsonPropertyName("browser_download_url")]
         public string BrowserDownloadUrl { get; set; } = "";
     }
 }
 
-public sealed record UpdateCheckResult(
-    bool Success,
-    bool HasUpdate,
-    string LatestVersion,
-    string ReleaseName,
+public sealed record UpdateReleaseInfo(
+    string TagName,
+    Version Version,
+    string Name,
+    string Body,
     string ReleaseUrl,
-    string? DownloadUrl,
+    string DownloadUrl,
+    DateTimeOffset PublishedAt,
+    bool IsNewerThanCurrent);
+
+public sealed record UpdateHistoryResult(
+    bool IsSuccess,
+    List<UpdateReleaseInfo> Releases,
+    UpdateReleaseInfo? LatestUpdate,
     string Message)
 {
-    public static UpdateCheckResult NoRelease(string message)
-    {
-        return new UpdateCheckResult(true, false, "", "", "", null, message);
-    }
-
-    public static UpdateCheckResult UpToDate(string latestVersion, string releaseUrl, string message)
-    {
-        return new UpdateCheckResult(true, false, latestVersion, "", releaseUrl, null, message);
-    }
-
-    public static UpdateCheckResult UpdateAvailable(
-        string latestVersion,
-        string releaseName,
-        string releaseUrl,
-        string? downloadUrl,
+    public static UpdateHistoryResult Success(
+        List<UpdateReleaseInfo> releases,
+        UpdateReleaseInfo? latestUpdate,
         string message)
     {
-        return new UpdateCheckResult(true, true, latestVersion, releaseName, releaseUrl, downloadUrl, message);
+        return new UpdateHistoryResult(true, releases, latestUpdate, message);
     }
 
-    public static UpdateCheckResult Error(string message)
+    public static UpdateHistoryResult Error(string message)
     {
-        return new UpdateCheckResult(false, false, "", "", "", null, message);
+        return new UpdateHistoryResult(false, [], null, message);
     }
 }
