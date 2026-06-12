@@ -300,36 +300,28 @@ public partial class Form1 : Form
     private TabPage BuildProfileTab()
     {
         var tab = new TabPage("Hồ sơ") { BackColor = AppBackColor };
+        var profileMenu = BuildProfileContextMenu();
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 2,
             Padding = new Padding(12),
             BackColor = AppBackColor
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.ContextMenuStrip = profileMenu;
+        tab.ContextMenuStrip = profileMenu;
 
         _profileTextBox = new TextBox
         {
-            Dock = DockStyle.Fill,
             Multiline = true,
             MaxLength = 0,
-            ScrollBars = ScrollBars.Both,
-            WordWrap = false,
-            Font = MonoFont,
-            PlaceholderText = "uid|token"
+            Visible = false
         };
-        StyleTextBox(_profileTextBox);
-        root.Controls.Add(_profileTextBox, 0, 0);
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, BackColor = AppBackColor, Padding = new Padding(0, 5, 0, 0) };
-        var importButton = CreateButton("Nhập .txt", 110);
-        importButton.Click += (_, _) => ImportProfiles();
-        var loadButton = CreateButton("Nạp profile", 110);
-        loadButton.Click += (_, _) => LoadProfilesFromInput();
         _checkTokensButton = CreateButton("Check token", 120);
         _checkTokensButton.Click += async (_, _) => await CheckTokensAsync();
         var updateButton = CreateButton("Cập nhật", 110);
@@ -346,10 +338,11 @@ public partial class Form1 : Form
             RefreshProfileGrid();
             SaveAllSettings(showMessage: false);
         };
-        buttons.Controls.AddRange([importButton, loadButton, _checkTokensButton, updateButton, saveDataButton, deleteCheckedButton, clearButton]);
-        root.Controls.Add(buttons, 0, 1);
+        buttons.Controls.AddRange([_checkTokensButton, updateButton, saveDataButton, deleteCheckedButton, clearButton]);
+        root.Controls.Add(buttons, 0, 0);
 
         _profileGrid = CreateGrid();
+        _profileGrid.ContextMenuStrip = profileMenu;
         _profileGrid.ReadOnly = false;
         _profileGrid.CurrentCellDirtyStateChanged += (_, _) =>
         {
@@ -380,10 +373,24 @@ public partial class Form1 : Form
             }
         }
         SetColumnWidths(_profileGrid, 50, 55, 160, 420, 150, 90, 420);
-        root.Controls.Add(_profileGrid, 0, 2);
+        root.Controls.Add(_profileGrid, 0, 1);
 
         tab.Controls.Add(root);
         return tab;
+    }
+
+    private ContextMenuStrip BuildProfileContextMenu()
+    {
+        var menu = new ContextMenuStrip
+        {
+            Font = UiFont,
+            BackColor = PanelBackColor,
+            ForeColor = TextColor
+        };
+        var importItem = new ToolStripMenuItem("Nhập dữ liệu");
+        importItem.Click += (_, _) => ShowProfileImportDialog();
+        menu.Items.Add(importItem);
+        return menu;
     }
 
     private TabPage BuildInteractionTab()
@@ -886,6 +893,18 @@ public partial class Form1 : Form
             _profileTextBox.Text = File.ReadAllText(dialog.FileName);
             LoadProfilesFromInput();
         }
+    }
+
+    private void ShowProfileImportDialog()
+    {
+        using var dialog = new ProfileImportDialog(_profileTextBox.Text);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        _profileTextBox.Text = dialog.InputText;
+        LoadProfilesFromInput();
     }
 
     private void LoadProfilesFromInput()
