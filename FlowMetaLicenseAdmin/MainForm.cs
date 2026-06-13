@@ -2,6 +2,7 @@ namespace FlowMetaLicenseAdmin;
 
 public sealed class MainForm : Form
 {
+    private static readonly DateTime PermanentExpiryLocal = DateTimePicker.MaximumDateTime;
     private static readonly Color BackColorValue = Color.FromArgb(232, 241, 255);
     private static readonly Color PrimaryColor = Color.FromArgb(8, 102, 255);
     private static readonly Color DangerColor = Color.FromArgb(220, 38, 38);
@@ -159,9 +160,10 @@ public sealed class MainForm : Form
     private Control BuildExpiryRow()
     {
         _expiryPicker.Dock = DockStyle.Left;
-        _expiryPicker.Width = 220;
+        _expiryPicker.Width = 230;
         _expiryPicker.Format = DateTimePickerFormat.Custom;
-        _expiryPicker.CustomFormat = "yyyy-MM-dd HH:mm:ss";
+        _expiryPicker.CustomFormat = "HH:mm:ss dd/MM/yyyy";
+        _expiryPicker.MaxDate = PermanentExpiryLocal;
         _expiryPicker.Value = DateTime.Now.AddDays(30);
 
         _presetComboBox.Dock = DockStyle.Left;
@@ -187,15 +189,21 @@ public sealed class MainForm : Form
             Margin = new Padding(16, 0, 8, 0)
         });
         panel.Controls.Add(_presetComboBox);
-        return WrapWithLabel("Hạn sử dụng:", panel);
+        return WrapWithLabel("Hạn sử dụng (giờ:phút:giây ngày/tháng/năm):", panel);
     }
 
     private void ConfigurePresets()
     {
-        _presetComboBox.Items.AddRange(["1 ngày", "7 ngày", "30 ngày", "90 ngày", "365 ngày"]);
+        _presetComboBox.Items.AddRange(["1 ngày", "7 ngày", "30 ngày", "90 ngày", "365 ngày", "Vĩnh viễn"]);
         _presetComboBox.SelectedIndex = 2;
         _presetComboBox.SelectedIndexChanged += (_, _) =>
         {
+            if (string.Equals(_presetComboBox.SelectedItem?.ToString(), "Vĩnh viễn", StringComparison.OrdinalIgnoreCase))
+            {
+                _expiryPicker.Value = PermanentExpiryLocal;
+                return;
+            }
+
             var days = _presetComboBox.SelectedItem?.ToString() switch
             {
                 "1 ngày" => 1,

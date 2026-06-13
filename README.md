@@ -251,29 +251,16 @@ Important:
 
 ## GitHub Release Update Check
 
-FlowMeta checks updates from:
-
 ```text
-https://github.com/dinhquangtuy/FlowMeta_Release/releases/latest
-```
+    ________               __  ___     __
+   / ____/ /___ _      __ /  |/  /__  / /_____ _
+  / /_  / / __ \ | /| / // /|_/ / _ \/ __/ __ `/
+ / __/ / / /_/ / |/ |/ // /  / /  __/ /_/ /_/ /
+/_/   /_/\____/|__/|__//_/  /_/\___/\__/\__,_/
 
-Release rules:
-
-- Tag must use semantic version, for example `v1.0.0`, `v1.0.1`, `v1.1.0`.
-- The release should include an asset named `FlowMeta.exe`.
-- The app compares the current app version with the latest release tag.
-- If a newer release exists, the app opens the release/download link for the user.
-
-Publish customer exe:
-
-```powershell
-dotnet publish .\ToolEditDeleteCmt.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
-```
-
-Upload this file to GitHub Release:
-
-```text
-bin\Release\net9.0-windows\win-x64\publish\FlowMeta.exe
+        [ RELEASE ]  FlowMeta.exe
+        [ UPDATE  ]  GitHub Release
+        [ STATUS  ]  Latest build only
 ```
 
 FlowMeta sử dụng license offline gắn theo máy:
@@ -324,29 +311,16 @@ Lưu ý:
 
 ## Kiểm Tra Cập Nhật Qua GitHub Release
 
-FlowMeta kiểm tra cập nhật từ:
-
 ```text
-https://github.com/dinhquangtuy/FlowMeta_Release/releases/latest
-```
+    ________               __  ___     __
+   / ____/ /___ _      __ /  |/  /__  / /_____ _
+  / /_  / / __ \ | /| / // /|_/ / _ \/ __/ __ `/
+ / __/ / / /_/ / |/ |/ // /  / /  __/ /_/ /_/ /
+/_/   /_/\____/|__/|__//_/  /_/\___/\__/\__,_/
 
-Quy tắc release:
-
-- Tag dùng dạng version, ví dụ `v1.0.0`, `v1.0.1`, `v1.1.0`.
-- Release nên có file đính kèm tên `FlowMeta.exe`.
-- App so sánh version hiện tại với tag release mới nhất.
-- Nếu có bản mới, app mở link release/tải file để người dùng cập nhật.
-
-Publish file exe gửi khách:
-
-```powershell
-dotnet publish .\ToolEditDeleteCmt.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
-```
-
-Upload file này lên GitHub Release:
-
-```text
-bin\Release\net9.0-windows\win-x64\publish\FlowMeta.exe
+        [ PHÁT HÀNH ]  FlowMeta.exe
+        [ CẬP NHẬT  ]  GitHub Release
+        [ TRẠNG THÁI]  Chỉ giữ bản mới nhất
 ```
 
 ---

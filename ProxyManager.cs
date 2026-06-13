@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace ToolEditDeleteCmt;
 
 public sealed class ProxyManager
@@ -34,6 +36,7 @@ public sealed class ProxyManager
                     LastGetIpAt = s.LastGetIpAt,
                     IpExpiresAt = s.IpExpiresAt,
                     LastCheckedAt = s.LastCheckedAt,
+                    NextGetNewAt = s.NextGetNewAt,
                     LastError = s.LastError,
                     Endpoint = s.Endpoint
                 })
@@ -61,7 +64,7 @@ public sealed class ProxyManager
                 {
                     Index = i + 1,
                     ApiKey = keys[i],
-                    Status = "Stopped"
+                    Status = ""
                 });
             }
         }
@@ -76,7 +79,7 @@ public sealed class ProxyManager
 
     public void Start()
     {
-        Stop();
+        CancelRunning();
         _cts = new CancellationTokenSource();
         lock (_sync)
         {
@@ -95,20 +98,21 @@ public sealed class ProxyManager
 
     public void Stop()
     {
-        _cts?.Cancel();
-        _cts = null;
+        CancelRunning();
 
         lock (_sync)
         {
             _nextProxyIndex = 0;
-            foreach (var state in _states)
-            {
-                state.Status = "Stopped";
-                state.ReservedUses = 0;
-            }
+            _states.Clear();
         }
 
         StateChanged?.Invoke();
+    }
+
+    private void CancelRunning()
+    {
+        _cts?.Cancel();
+        _cts = null;
     }
 
     public async Task<ProxyLease> AcquireAsync(CancellationToken cancellationToken)
@@ -187,6 +191,7 @@ public sealed class ProxyManager
             {
                 current.Status = "GettingNew";
                 current.LastError = "";
+                current.NextGetNewAt = null;
             }
         }
 
@@ -204,15 +209,11 @@ public sealed class ProxyManager
             await CheckCurrentProxiesAsync(cancellationToken);
 
             List<string> keys;
+            var now = DateTime.Now;
             lock (_sync)
             {
                 keys = _states
-                    .Where(s =>
-                        s.Status != "GettingNew" &&
-                         (s.Endpoint is null ||
-                          s.RemainingUses <= 0 ||
-                          IsIpExpired(s) ||
-                          s.Status is "Starting" or "Error" or "Waiting"))
+                    .Where(s => ShouldRequestNewProxy(s, now))
                     .Select(s => s.ApiKey)
                     .ToList();
             }
@@ -335,6 +336,7 @@ public sealed class ProxyManager
                 state.LastGetIpAt = DateTime.Now;
                 state.IpExpiresAt = endpoint.ExpiresAt ?? DateTime.Now.Add(IpLifetime);
                 state.LastError = endpoint.ApiMessage;
+                state.NextGetNewAt = null;
             }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -344,11 +346,7 @@ public sealed class ProxyManager
                 return;
             }
 
-            SetStatus(apiKey, "Waiting", $"Quá {GetNewTimeoutSeconds}s chưa lấy được IP, gọi lấy IP mới lại.");
-            if (_cts is not null)
-            {
-                _ = GetNewProxyForKeyAsync(apiKey, cancellationToken);
-            }
+            SetWaitingStatus(apiKey, $"Quá {GetNewTimeoutSeconds}s chưa lấy được IP, gọi lấy IP mới lại.", TimeSpan.FromSeconds(1));
         }
         catch (OperationCanceledException)
         {
@@ -361,7 +359,7 @@ public sealed class ProxyManager
                 return;
             }
 
-            SetStatus(apiKey, "Waiting", ex.Message);
+            SetWaitingStatus(apiKey, ex.Message, TryGetRetryDelay(ex.Message));
         }
         finally
         {
@@ -385,6 +383,7 @@ public sealed class ProxyManager
             _getNewVersions[apiKey] = getNewVersion;
             state.Status = "GettingNew";
             state.LastError = "";
+            state.NextGetNewAt = null;
             return getNewVersion;
         }
     }
@@ -410,6 +409,24 @@ public sealed class ProxyManager
         return status.Equals("Ready", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static bool ShouldRequestNewProxy(ProxyKeyState state, DateTime now)
+    {
+        if (state.Status == "GettingNew")
+        {
+            return false;
+        }
+
+        if (state.NextGetNewAt is not null && now < state.NextGetNewAt.Value)
+        {
+            return false;
+        }
+
+        return state.Endpoint is null ||
+               state.RemainingUses <= 0 ||
+               IsIpExpired(state) ||
+               state.Status is "Starting" or "Error" or "Waiting";
+    }
+
     private void SetStatus(string apiKey, string status, string error)
     {
         lock (_sync)
@@ -425,6 +442,44 @@ public sealed class ProxyManager
         }
 
         StateChanged?.Invoke();
+    }
+
+    private void SetWaitingStatus(string apiKey, string error, TimeSpan? retryDelay)
+    {
+        lock (_sync)
+        {
+            var state = _states.FirstOrDefault(s => s.ApiKey == apiKey);
+            if (state is null)
+            {
+                return;
+            }
+
+            state.Status = "Waiting";
+            state.LastError = NormalizeRetryMessage(error, retryDelay);
+            var delay = retryDelay ?? TimeSpan.FromSeconds(Random.Shared.Next(1, 6));
+            state.NextGetNewAt = DateTime.Now.Add(delay);
+            state.LastError = NormalizeRetryMessage(error, delay);
+        }
+
+        StateChanged?.Invoke();
+    }
+
+    private static TimeSpan? TryGetRetryDelay(string message)
+    {
+        var match = Regex.Match(
+            message,
+            @"(?:Gửi lại sau|Gui lai sau|retry after|try again in)\s*(\d+)\s*(?:giây|giay|s|sec|secs|second|seconds)?",
+            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        return match.Success && int.TryParse(match.Groups[1].Value, out var seconds) && seconds > 0
+            ? TimeSpan.FromSeconds(seconds)
+            : null;
+    }
+
+    private static string NormalizeRetryMessage(string error, TimeSpan? retryDelay)
+    {
+        return retryDelay is null
+            ? error
+            : $"Gửi lại sau {Math.Max(1, (int)Math.Ceiling(retryDelay.Value.TotalSeconds))}s";
     }
 
     private void SetCheckError(string apiKey, string error)

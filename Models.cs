@@ -32,6 +32,7 @@ public sealed class ProxyKeyState
     public DateTime? LastGetIpAt { get; set; }
     public DateTime? IpExpiresAt { get; set; }
     public DateTime? LastCheckedAt { get; set; }
+    public DateTime? NextGetNewAt { get; set; }
     public string LastError { get; set; } = "";
     public ProxyEndpoint? Endpoint { get; set; }
 

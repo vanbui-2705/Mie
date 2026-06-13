@@ -1,3 +1,5 @@
+using System.Drawing.Drawing2D;
+
 namespace ToolEditDeleteCmt;
 
 public partial class Form1 : Form
@@ -35,7 +37,13 @@ public partial class Form1 : Form
 
     private TextBox _profileTextBox = null!;
     private DataGridView _profileGrid = null!;
-    private Button _checkTokensButton = null!;
+    private ToolStripMenuItem _checkTokensMenuItem = null!;
+    private Label _profileTotalCountLabel = null!;
+    private Label _profileSelectedCountLabel = null!;
+    private Label _profileCheckProgressLabel = null!;
+    private int _profileCheckCompleted;
+    private int _profileCheckTotal;
+    private bool _profileChecking;
     private TabControl _interactionActionTabs = null!;
     private TextBox _editUidTextBox = null!;
     private TextBox _editLinksTextBox = null!;
@@ -73,6 +81,11 @@ public partial class Form1 : Form
     private NumericUpDown _proxyCheckIntervalInput = null!;
     private DataGridView _proxyGrid = null!;
     private System.Windows.Forms.Timer _proxyCountdownTimer = null!;
+    private System.Windows.Forms.Timer _licenseGuardTimer = null!;
+    private System.Windows.Forms.Timer _networkGuardTimer = null!;
+    private DateTimeOffset? _networkLostAt;
+    private bool _networkWarningShown;
+    private bool _networkCheckRunning;
     private bool _skipExitConfirm;
 
     public Form1(LicenseManager licenseManager)
@@ -87,8 +100,6 @@ public partial class Form1 : Form
         InitializeComponent();
         WireEvents();
         LoadSettingsIntoUi();
-        _proxyManager.Configure(_settings);
-        RefreshProxyGrid();
     }
 
     private void InitializeComponent()
@@ -101,11 +112,10 @@ public partial class Form1 : Form
         Font = UiFont;
         BackColor = AppBackColor;
 
-        var tabs = new TabControl
+        var tabs = new FlatTabControl
         {
             Dock = DockStyle.Fill,
-            Font = UiFontBold,
-            Padding = new Point(14, 5)
+            Font = UiFontBold
         };
         StyleTabControl(tabs);
         tabs.TabPages.Add(BuildProfileTab());
@@ -124,6 +134,11 @@ public partial class Form1 : Form
 
         var expiry = status.ExpiresAtUtc.Value.ToLocalTime();
         var remaining = expiry - DateTimeOffset.Now;
+        if (remaining.TotalDays > 36500)
+        {
+            return $"{AppDisplayName} - Hạn sử dụng: vĩnh viễn";
+        }
+
         var remainingDays = Math.Max(0, (int)Math.Ceiling(remaining.TotalDays));
         return $"{AppDisplayName} - Hạn sử dụng đến {expiry:dd/MM/yyyy} - còn {remainingDays} ngày";
     }
@@ -156,22 +171,75 @@ public partial class Form1 : Form
         };
     }
 
+    private static FlowLayoutPanel CreateInlineOptionsPanel()
+    {
+        return new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = Color.Transparent,
+            Padding = new Padding(0, 2, 0, 0),
+            Margin = Padding.Empty
+        };
+    }
+
+    private static Label CreateInlineText(string text)
+    {
+        return new Label
+        {
+            Text = text,
+            AutoSize = true,
+            Height = 26,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = TextColor,
+            BackColor = Color.Transparent,
+            Font = UiFontBold,
+            Margin = new Padding(10, 3, 10, 0)
+        };
+    }
+
     private static void StyleTabControl(TabControl tabControl)
     {
+        if (tabControl is FlatTabControl flatTabControl)
+        {
+            flatTabControl.StripBackColor = AppBackColor;
+            flatTabControl.TabBackColor = PanelBackColor;
+            flatTabControl.SelectedTabBackColor = PrimarySoftColor;
+            flatTabControl.TextColor = TextColor;
+            flatTabControl.SelectedTextColor = PrimaryColor;
+            flatTabControl.ItemSize = new Size(116, 36);
+            flatTabControl.Padding = new Point(0, 0);
+            return;
+        }
+
         tabControl.DrawMode = TabDrawMode.OwnerDrawFixed;
-        tabControl.SizeMode = TabSizeMode.Normal;
+        tabControl.SizeMode = TabSizeMode.Fixed;
+        tabControl.ItemSize = new Size(116, 30);
+        tabControl.Padding = new Point(0, 0);
+        tabControl.Appearance = TabAppearance.FlatButtons;
         tabControl.DrawItem += (_, e) =>
         {
             var selected = e.Index == tabControl.SelectedIndex;
             var tabPage = tabControl.TabPages[e.Index];
-            var bounds = e.Bounds;
-            var fill = selected ? TabSelectedColor : TabBackColor;
-            var textColor = selected ? PrimaryDarkColor : TextColor;
+            var itemBounds = e.Bounds;
+            var bounds = new Rectangle(
+                itemBounds.X + 4,
+                itemBounds.Y + 4,
+                itemBounds.Width - 8,
+                itemBounds.Height - 8);
+            var fill = selected ? PrimarySoftColor : PanelBackColor;
+            var border = fill;
+            var textColor = selected ? PrimaryColor : TextColor;
 
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using var stripBrush = new SolidBrush(AppBackColor);
             using var backBrush = new SolidBrush(fill);
-            using var borderPen = new Pen(BorderColor);
-            e.Graphics.FillRectangle(backBrush, bounds);
-            e.Graphics.DrawRectangle(borderPen, bounds.X, bounds.Y, bounds.Width - 1, bounds.Height - 1);
+            using var borderPen = new Pen(border);
+            using var path = CreateRoundRectanglePath(bounds, 6);
+            e.Graphics.FillRectangle(stripBrush, itemBounds);
+            e.Graphics.FillPath(backBrush, path);
+            e.Graphics.DrawPath(borderPen, path);
 
             TextRenderer.DrawText(
                 e.Graphics,
@@ -181,6 +249,18 @@ public partial class Form1 : Form
                 textColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
         };
+    }
+
+    private static GraphicsPath CreateRoundRectanglePath(Rectangle bounds, int radius)
+    {
+        var diameter = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(bounds.Left, bounds.Top, diameter, diameter, 180, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Top, diameter, diameter, 270, 90);
+        path.AddArc(bounds.Right - diameter, bounds.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(bounds.Left, bounds.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
     }
 
     private static Panel CreateHeaderWithCount(string text, Label countLabel)
@@ -310,12 +390,13 @@ public partial class Form1 : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 3,
             Padding = new Padding(12),
             BackColor = AppBackColor
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         root.ContextMenuStrip = profileMenu;
         tab.ContextMenuStrip = profileMenu;
 
@@ -327,23 +408,13 @@ public partial class Form1 : Form
         };
 
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, BackColor = AppBackColor, Padding = new Padding(0, 5, 0, 0) };
-        _checkTokensButton = CreateButton("Check token", 120);
-        _checkTokensButton.Click += async (_, _) => await CheckTokensAsync();
         var updateButton = CreateButton("Cập nhật", 110);
         updateButton.Click += (_, _) => ShowUpdateDialog();
         var saveDataButton = CreateButton("Lưu dữ liệu", 110);
         saveDataButton.Click += (_, _) => SaveAllSettings(showMessage: true);
-        var deleteCheckedButton = CreateButton("Xóa đã tích", 120, DangerColor);
+        var deleteCheckedButton = CreateButton("Xóa đã chọn", 120);
         deleteCheckedButton.Click += (_, _) => DeleteCheckedProfiles();
-        var clearButton = CreateButton("Xóa trắng", 100);
-        clearButton.Click += (_, _) =>
-        {
-            _profileTextBox.Clear();
-            _profileManager.Clear();
-            RefreshProfileGrid();
-            SaveAllSettings(showMessage: false);
-        };
-        buttons.Controls.AddRange([_checkTokensButton, updateButton, saveDataButton, deleteCheckedButton, clearButton]);
+        buttons.Controls.AddRange([updateButton, saveDataButton, deleteCheckedButton]);
         root.Controls.Add(buttons, 0, 0);
 
         _profileGrid = CreateGrid();
@@ -356,14 +427,17 @@ public partial class Form1 : Form
                 _profileGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             }
         };
-        _profileGrid.Columns.Add(new DataGridViewCheckBoxColumn
+        _profileGrid.CellValueChanged += ProfileGridCellValueChanged;
+        var checkedColumn = new DataGridViewCheckBoxColumn
         {
             Name = "Checked",
-            HeaderText = "Chọn",
+            HeaderText = "",
+            HeaderCell = new CheckBoxHeaderCell(),
             Width = 50,
             ReadOnly = false,
             SortMode = DataGridViewColumnSortMode.NotSortable
-        });
+        };
+        _profileGrid.Columns.Add(checkedColumn);
         _profileGrid.Columns.Add("Index", "STT");
         _profileGrid.Columns.Add("Uid", "UID");
         _profileGrid.Columns.Add("Token", "Token");
@@ -380,6 +454,9 @@ public partial class Form1 : Form
         SetColumnWidths(_profileGrid, 50, 55, 160, 420, 150, 90, 420);
         root.Controls.Add(_profileGrid, 0, 1);
 
+        var summaryPanel = BuildProfileSummaryPanel();
+        root.Controls.Add(summaryPanel, 0, 2);
+
         tab.Controls.Add(root);
         return tab;
     }
@@ -394,8 +471,63 @@ public partial class Form1 : Form
         };
         var importItem = new ToolStripMenuItem("Nhập dữ liệu");
         importItem.Click += (_, _) => ShowProfileImportDialog();
+        _checkTokensMenuItem = new ToolStripMenuItem("Check Token");
+        _checkTokensMenuItem.Click += async (_, _) => await CheckTokensAsync();
         menu.Items.Add(importItem);
+        menu.Items.Add(_checkTokensMenuItem);
         return menu;
+    }
+
+    private FlowLayoutPanel BuildProfileSummaryPanel()
+    {
+        var panel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = Color.FromArgb(191, 232, 238),
+            Padding = new Padding(14, 6, 0, 0),
+            Margin = new Padding(0, 2, 0, 6)
+        };
+
+        _profileTotalCountLabel = CreateProfileSummaryValueLabel();
+        _profileSelectedCountLabel = CreateProfileSummaryValueLabel();
+        _profileCheckProgressLabel = CreateProfileSummaryValueLabel();
+
+        panel.Controls.Add(CreateProfileSummaryTitleLabel("Tổng số nick"));
+        panel.Controls.Add(_profileTotalCountLabel);
+        panel.Controls.Add(CreateProfileSummaryTitleLabel("Tích chọn"));
+        panel.Controls.Add(_profileSelectedCountLabel);
+        panel.Controls.Add(CreateProfileSummaryTitleLabel("Trạng thái"));
+        panel.Controls.Add(_profileCheckProgressLabel);
+        UpdateProfileSummary();
+        return panel;
+    }
+
+    private static Label CreateProfileSummaryTitleLabel(string text)
+    {
+        return new Label
+        {
+            Text = text,
+            AutoSize = true,
+            ForeColor = TextColor,
+            Font = UiFontBold,
+            Margin = new Padding(0, 0, 10, 0),
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+    }
+
+    private static Label CreateProfileSummaryValueLabel()
+    {
+        return new Label
+        {
+            Text = "0",
+            AutoSize = true,
+            ForeColor = DangerColor,
+            Font = UiFontBold,
+            Margin = new Padding(0, 0, 28, 0),
+            TextAlign = ContentAlignment.MiddleLeft
+        };
     }
 
     private TabPage BuildInteractionTab()
@@ -411,14 +543,13 @@ public partial class Form1 : Form
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 320));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 264));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
 
-        _interactionActionTabs = new TabControl
+        _interactionActionTabs = new FlatTabControl
         {
             Dock = DockStyle.Fill,
-            Font = UiFontBold,
-            Padding = new Point(12, 4)
+            Font = UiFontBold
         };
         StyleTabControl(_interactionActionTabs);
         _interactionActionTabs.TabPages.Add(BuildEditActionTab());
@@ -485,21 +616,27 @@ public partial class Form1 : Form
         options.Controls.Add(CreateLabel("Mỗi UID cmt:"), 0, 3);
         _postsPerUidInput = new NumericUpDown { Dock = DockStyle.Left, Minimum = 1, Maximum = 100000, Value = 1, Width = 100 };
         StyleNumeric(_postsPerUidInput);
-        options.Controls.Add(_postsPerUidInput, 1, 3);
-        options.Controls.Add(CreateLabel("post"), 2, 3);
+        var postsPerUidPanel = CreateInlineOptionsPanel();
+        postsPerUidPanel.Controls.Add(_postsPerUidInput);
+        postsPerUidPanel.Controls.Add(CreateInlineText("post"));
+        options.SetColumnSpan(postsPerUidPanel, 5);
+        options.Controls.Add(postsPerUidPanel, 1, 3);
 
         options.Controls.Add(CreateLabel("Delay từ:"), 0, 4);
         _delayMinInput = new NumericUpDown { Dock = DockStyle.Left, Minimum = 0, Maximum = 86400, Value = 0, Width = 100 };
         StyleNumeric(_delayMinInput);
-        options.Controls.Add(_delayMinInput, 1, 4);
-        options.Controls.Add(CreateLabel("đến:"), 2, 4);
         _delayMaxInput = new NumericUpDown { Dock = DockStyle.Left, Minimum = 0, Maximum = 86400, Value = 0, Width = 100 };
         StyleNumeric(_delayMaxInput);
-        options.Controls.Add(_delayMaxInput, 3, 4);
-        options.Controls.Add(CreateLabel("sau mỗi vòng:"), 4, 4);
         _delayEveryRoundsInput = new NumericUpDown { Dock = DockStyle.Left, Minimum = 1, Maximum = 100000, Value = 1, Width = 100 };
         StyleNumeric(_delayEveryRoundsInput);
-        options.Controls.Add(_delayEveryRoundsInput, 5, 4);
+        var delayPanel = CreateInlineOptionsPanel();
+        delayPanel.Controls.Add(_delayMinInput);
+        delayPanel.Controls.Add(CreateInlineText("đến:"));
+        delayPanel.Controls.Add(_delayMaxInput);
+        delayPanel.Controls.Add(CreateInlineText("sau mỗi vòng:"));
+        delayPanel.Controls.Add(_delayEveryRoundsInput);
+        options.SetColumnSpan(delayPanel, 5);
+        options.Controls.Add(delayPanel, 1, 4);
 
         _startTasksButton = CreateButton("Bắt đầu", backColor: PrimaryColor, dock: DockStyle.Fill);
         _startTasksButton.Click += async (_, _) => await StartTasksAsync();
@@ -520,7 +657,6 @@ public partial class Form1 : Form
             BackColor = PrimarySoftColor,
             Padding = new Padding(10, 0, 10, 0)
         };
-        root.Controls.Add(_statsLabel, 0, 2);
 
         _logGrid = CreateGrid();
         _logGrid.Columns.Add("Index", "STT");
@@ -538,7 +674,8 @@ public partial class Form1 : Form
 
         _logGrid.ColumnHeaderMouseClick += LogGridColumnHeaderMouseClick;
         UpdateLogSortGlyphs();
-        root.Controls.Add(_logGrid, 0, 3);
+        root.Controls.Add(_logGrid, 0, 2);
+        root.Controls.Add(_statsLabel, 0, 3);
 
         tab.Controls.Add(root);
         return tab;
@@ -710,6 +847,11 @@ public partial class Form1 : Form
         _startProxyButton = CreateButton("Bắt đầu proxy", 130, PrimaryColor);
         _startProxyButton.Click += (_, _) =>
         {
+            if (!EnsureLicenseForAction("bắt đầu proxy"))
+            {
+                return;
+            }
+
             SaveAllSettings(showMessage: false);
             _proxyManager.Configure(_settings);
             _proxyManager.Start();
@@ -734,8 +876,8 @@ public partial class Form1 : Form
         _proxyGrid.Columns.Add("Index", "STT");
         _proxyGrid.Columns.Add("Key", "API key ẩn");
         _proxyGrid.Columns.Add("Proxy", "Proxy hiện tại");
-        _proxyGrid.Columns.Add("Remaining", "Lượt còn lại");
-        _proxyGrid.Columns.Add("Reserved", "Đang giữ");
+        _proxyGrid.Columns.Add("Remaining", "Số lượt dùng còn lại");
+        _proxyGrid.Columns.Add("Reserved", "Số UID đang dùng");
         _proxyGrid.Columns.Add("Status", "Trạng thái");
         _proxyGrid.Columns.Add("LastGet", "Lần lấy IP gần nhất");
         _proxyGrid.Columns.Add("ExpiresIn", "Còn hạn IP");
@@ -763,6 +905,15 @@ public partial class Form1 : Form
         _proxyCountdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         _proxyCountdownTimer.Tick += (_, _) => UpdateProxyExpiryCountdown();
         _proxyCountdownTimer.Start();
+
+        _licenseGuardTimer = new System.Windows.Forms.Timer { Interval = 60000 };
+        _licenseGuardTimer.Tick += (_, _) => EnsureLicenseStillValid();
+        _licenseGuardTimer.Start();
+        Shown += (_, _) => EnsureLicenseStillValid();
+
+        _networkGuardTimer = new System.Windows.Forms.Timer { Interval = 30000 };
+        _networkGuardTimer.Tick += async (_, _) => await CheckNetworkWhileRunningAsync();
+        _networkGuardTimer.Start();
     }
 
     private void UpdateProxyButtons()
@@ -783,6 +934,84 @@ public partial class Form1 : Form
         {
             _skipExitConfirm = true;
             Close();
+        }
+    }
+
+    private bool EnsureLicenseForAction(string actionName)
+    {
+        return LicenseGuard.EnsureValid(this, _licenseManager, actionName);
+    }
+
+    private void EnsureLicenseStillValid()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        if (LicenseGuard.ValidateRuntime(_licenseManager).IsAllowed)
+        {
+            return;
+        }
+
+        _skipExitConfirm = true;
+        _taskManager.Stop();
+        _proxyManager.Stop();
+        _licenseGuardTimer?.Stop();
+        LicenseGuard.ValidateRuntimeOrClose(this, _licenseManager);
+    }
+
+    private async Task CheckNetworkWhileRunningAsync()
+    {
+        if (_networkCheckRunning || IsDisposed)
+        {
+            return;
+        }
+
+        _networkCheckRunning = true;
+        try
+        {
+            var hasInternet = await NetworkGuard.HasInternetAsync();
+            if (hasInternet)
+            {
+                _networkLostAt = null;
+                _networkWarningShown = false;
+                return;
+            }
+
+            _networkLostAt ??= DateTimeOffset.Now;
+            if (!_networkWarningShown)
+            {
+                _networkWarningShown = true;
+                MessageBox.Show(
+                    this,
+                    "Mất kết nối mạng. FlowMeta sẽ tự thoát nếu sau 10 phút mạng chưa trở lại.",
+                    "FlowMeta",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+
+            if (DateTimeOffset.Now - _networkLostAt.Value < TimeSpan.FromMinutes(10))
+            {
+                return;
+            }
+
+            _skipExitConfirm = true;
+            _networkGuardTimer?.Stop();
+            _licenseGuardTimer?.Stop();
+            _taskManager.Stop();
+            _proxyManager.Stop();
+            MessageBox.Show(
+                this,
+                "Đã mất mạng quá 10 phút. FlowMeta sẽ tự thoát.",
+                "FlowMeta",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+            Close();
+        }
+        finally
+        {
+            _networkCheckRunning = false;
         }
     }
 
@@ -953,6 +1182,11 @@ public partial class Form1 : Form
 
     private async Task CheckTokensAsync()
     {
+        if (!EnsureLicenseForAction("Check Token"))
+        {
+            return;
+        }
+
         if (_profileManager.Profiles.Count == 0)
         {
             LoadProfilesFromInput();
@@ -964,12 +1198,23 @@ public partial class Form1 : Form
             return;
         }
 
-        SetButtonRunning(_checkTokensButton, true);
+        var profiles = GetCheckedProfiles();
+        if (profiles.Count == 0)
+        {
+            MessageBox.Show("Chưa tích profile nào để check token.", "Check token", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        _checkTokensMenuItem.Enabled = false;
+        _checkTokensMenuItem.Text = "Đang check token...";
         try
         {
             using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
             using var semaphore = new SemaphoreSlim(10);
-            var profiles = _profileManager.Profiles.ToList();
+            _profileCheckCompleted = 0;
+            _profileCheckTotal = profiles.Count;
+            _profileChecking = true;
+            UpdateProfileSummary();
             var tasks = profiles.Select(async profile =>
             {
                 await semaphore.WaitAsync();
@@ -981,6 +1226,8 @@ public partial class Form1 : Form
                         profile.TokenStatus = result.Status;
                         profile.LastError = result.Error;
                         UpdateProfileStatusRow(profile.Uid, profile.TokenStatus, profile.LastError);
+                        _profileCheckCompleted++;
+                        UpdateProfileSummary();
                     });
                 }
                 finally
@@ -995,7 +1242,10 @@ public partial class Form1 : Form
         }
         finally
         {
-            SetButtonRunning(_checkTokensButton, false);
+            _profileChecking = false;
+            UpdateProfileSummary();
+            _checkTokensMenuItem.Text = "Check Token";
+            _checkTokensMenuItem.Enabled = true;
         }
     }
 
@@ -1100,6 +1350,11 @@ public partial class Form1 : Form
 
     private async Task StartTasksAsync()
     {
+        if (!EnsureLicenseForAction("bắt đầu tác vụ"))
+        {
+            return;
+        }
+
         if (_profileManager.Profiles.Count == 0)
         {
             LoadProfilesFromInput();
@@ -1338,17 +1593,86 @@ public partial class Form1 : Form
             stats.Failed > 0 ? MessageBoxIcon.Warning : MessageBoxIcon.Information);
     }
 
-    private void DeleteCheckedProfiles()
+    private void ProfileGridCellValueChanged(object? sender, DataGridViewCellEventArgs e)
     {
-        _profileGrid.EndEdit();
+        if (e.ColumnIndex < 0 || _profileGrid.Columns[e.ColumnIndex].Name != "Checked")
+        {
+            return;
+        }
 
-        var checkedUids = _profileGrid.Rows
+        UpdateProfileHeaderCheckbox();
+        UpdateProfileSummary();
+    }
+
+    private void UpdateProfileHeaderCheckbox()
+    {
+        var checkedColumn = _profileGrid.Columns["Checked"];
+        if (checkedColumn?.HeaderCell is not CheckBoxHeaderCell headerCell)
+        {
+            return;
+        }
+
+        var rows = _profileGrid.Rows.Cast<DataGridViewRow>().Where(row => !row.IsNewRow).ToList();
+        var allChecked = rows.Count > 0 && rows.All(row => Convert.ToBoolean(row.Cells["Checked"].Value ?? false));
+        headerCell.SetChecked(allChecked);
+    }
+
+    private void UpdateProfileSummary()
+    {
+        if (_profileTotalCountLabel is null ||
+            _profileSelectedCountLabel is null ||
+            _profileCheckProgressLabel is null)
+        {
+            return;
+        }
+
+        var selectedCount = _profileGrid is null
+            ? 0
+            : _profileGrid.Rows
+                .Cast<DataGridViewRow>()
+                .Count(row => !row.IsNewRow && Convert.ToBoolean(row.Cells["Checked"].Value ?? false));
+
+        _profileTotalCountLabel.Text = _profileManager.Profiles.Count.ToString();
+        _profileSelectedCountLabel.Text = selectedCount.ToString();
+        _profileCheckProgressLabel.Text = _profileChecking || _profileCheckTotal > 0
+            ? $"{_profileCheckCompleted} / {_profileCheckTotal}"
+            : "0 / 0";
+    }
+
+    private List<ProfileAccount> GetCheckedProfiles()
+    {
+        return GetCheckedProfileUids()
+            .Select(uid => _profileManager.FindByUid(uid))
+            .Where(profile => profile is not null)
+            .Cast<ProfileAccount>()
+            .ToList();
+    }
+
+    private List<string> GetCheckedProfileUids()
+    {
+        CommitProfileGridCheckboxes();
+        return _profileGrid.Rows
             .Cast<DataGridViewRow>()
-            .Where(row => Convert.ToBoolean(row.Cells["Checked"].Value ?? false))
+            .Where(row => !row.IsNewRow && Convert.ToBoolean(row.Cells["Checked"].Value ?? false))
             .Select(row => row.Cells["Uid"].Value?.ToString() ?? "")
             .Where(uid => !string.IsNullOrWhiteSpace(uid))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private void CommitProfileGridCheckboxes()
+    {
+        if (_profileGrid.IsCurrentCellDirty)
+        {
+            _profileGrid.CommitEdit(DataGridViewDataErrorContexts.Commit);
+        }
+
+        _profileGrid.EndEdit();
+    }
+
+    private void DeleteCheckedProfiles()
+    {
+        var checkedUids = GetCheckedProfileUids();
 
         if (checkedUids.Count == 0)
         {
@@ -1388,6 +1712,9 @@ public partial class Form1 : Form
                 profile.LastError);
             ApplyProfileRowStyle(_profileGrid.Rows[rowIndex], profile.TokenStatus);
         }
+
+        UpdateProfileHeaderCheckbox();
+        UpdateProfileSummary();
     }
 
     private void UpdateProfileStatusRow(string uid, string status, string error)
@@ -1412,7 +1739,7 @@ public partial class Form1 : Form
         var statusColor = GetProfileStatusColor(status);
         var backgroundColor = GetProfileStatusBackColor(status);
         row.DefaultCellStyle.BackColor = backgroundColor;
-        row.DefaultCellStyle.SelectionBackColor = ControlPaint.Dark(backgroundColor, 0.25F);
+        row.DefaultCellStyle.SelectionBackColor = PrimaryColor;
         row.DefaultCellStyle.SelectionForeColor = Color.White;
         row.Cells["Status"].Style.ForeColor = statusColor;
         row.Cells["Status"].Style.Font = UiFontBold;
@@ -1555,7 +1882,7 @@ public partial class Form1 : Form
                 proxy.LastGetIpAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
                 FormatProxyIpExpiresIn(proxy.IpExpiresAt),
                 proxy.LastCheckedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? "",
-                proxy.LastError);
+                FormatProxyLastError(proxy.LastError, proxy.NextGetNewAt));
         }
     }
 
@@ -1577,6 +1904,7 @@ public partial class Form1 : Form
             }
 
             row.Cells["ExpiresIn"].Value = FormatProxyIpExpiresIn(proxy.IpExpiresAt);
+            row.Cells["Error"].Value = FormatProxyLastError(proxy.LastError, proxy.NextGetNewAt);
         }
     }
 
@@ -1596,6 +1924,22 @@ public partial class Form1 : Form
         return remaining.TotalHours >= 1
             ? $"{(int)remaining.TotalHours:00}:{remaining.Minutes:00}:{remaining.Seconds:00}"
             : $"{remaining.Minutes:00}:{remaining.Seconds:00}";
+    }
+
+    private static string FormatProxyLastError(string error, DateTime? nextGetNewAt)
+    {
+        if (nextGetNewAt is null)
+        {
+            return error;
+        }
+
+        var remaining = nextGetNewAt.Value - DateTime.Now;
+        if (remaining <= TimeSpan.Zero)
+        {
+            return "Đang gọi lấy IP mới...";
+        }
+
+        return $"Gửi lại sau {Math.Max(1, (int)Math.Ceiling(remaining.TotalSeconds))}s";
     }
 
     private void AddLog(TaskLogEntry entry)
@@ -1795,7 +2139,7 @@ public partial class Form1 : Form
         };
 
         row.DefaultCellStyle.BackColor = backgroundColor;
-        row.DefaultCellStyle.SelectionBackColor = ControlPaint.Dark(backgroundColor, 0.25F);
+        row.DefaultCellStyle.SelectionBackColor = PrimaryColor;
         row.DefaultCellStyle.SelectionForeColor = Color.White;
         row.DefaultCellStyle.ForeColor = TextColor;
         row.Cells["Status"].Style.ForeColor = color;
@@ -1817,7 +2161,7 @@ public partial class Form1 : Form
             AllowUserToAddRows = false,
             AllowUserToDeleteRows = false,
             ReadOnly = true,
-            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
             AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
             SelectionMode = DataGridViewSelectionMode.CellSelect,
             MultiSelect = true,
@@ -1837,7 +2181,7 @@ public partial class Form1 : Form
         grid.DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
         grid.DefaultCellStyle.BackColor = PanelBackColor;
         grid.DefaultCellStyle.ForeColor = TextColor;
-        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(37, 99, 235);
+        grid.DefaultCellStyle.SelectionBackColor = PrimaryColor;
         grid.DefaultCellStyle.SelectionForeColor = Color.White;
         grid.DefaultCellStyle.Font = UiFont;
         grid.AlternatingRowsDefaultCellStyle.BackColor = Color.FromArgb(239, 246, 255);
@@ -1899,7 +2243,11 @@ public partial class Form1 : Form
     {
         for (var i = 0; i < widths.Length && i < grid.Columns.Count; i++)
         {
-            grid.Columns[i].Width = widths[i];
+            var column = grid.Columns[i];
+            column.MinimumWidth = Math.Min(widths[i], 60);
+            column.Width = widths[i];
+            column.FillWeight = Math.Max(widths[i], 1);
+            column.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
         }
     }
 
@@ -1927,6 +2275,10 @@ public partial class Form1 : Form
             SaveAllSettings(showMessage: false);
             _proxyCountdownTimer?.Stop();
             _proxyCountdownTimer?.Dispose();
+            _licenseGuardTimer?.Stop();
+            _licenseGuardTimer?.Dispose();
+            _networkGuardTimer?.Stop();
+            _networkGuardTimer?.Dispose();
             _taskManager.Stop();
             _proxyManager.Stop();
             base.OnFormClosing(e);
@@ -1950,6 +2302,10 @@ public partial class Form1 : Form
         SaveAllSettings(showMessage: false);
         _proxyCountdownTimer?.Stop();
         _proxyCountdownTimer?.Dispose();
+        _licenseGuardTimer?.Stop();
+        _licenseGuardTimer?.Dispose();
+        _networkGuardTimer?.Stop();
+        _networkGuardTimer?.Dispose();
         _taskManager.Stop();
         _proxyManager.Stop();
         base.OnFormClosing(e);
