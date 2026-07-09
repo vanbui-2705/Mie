@@ -1,0 +1,16 @@
+FROM mcr.microsoft.com/playwright/python:v1.49.1-noble
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends xvfb x11vnc novnc websockify fluxbox \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY remote_browser_start.sh /app/remote_browser_start.sh
+RUN chmod +x /app/remote_browser_start.sh
+
+EXPOSE 6080
+
+CMD ["/app/remote_browser_start.sh"]

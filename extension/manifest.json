@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "FlowMeta Connector",
+  "version": "0.1.18",
+  "description": "Run FlowMeta Facebook jobs in the user's real browser.",
+  "permissions": ["storage", "tabs", "scripting"],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "https://www.facebook.com/*",
+    "https://facebook.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "FlowMeta Connector",
+    "default_popup": "popup.html"
+  }
+}

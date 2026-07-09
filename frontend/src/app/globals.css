@@ -1,0 +1,280 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-heading);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  --color-surface-dark: var(--surface-dark);
+  --color-surface-row: var(--surface-row);
+  --color-surface-dark-fg: var(--surface-dark-fg);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-fg-on-soft: var(--accent-fg-on-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-fg-on-soft: var(--success-fg-on-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-fg-on-soft: var(--warning-fg-on-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-fg-on-soft: var(--danger-fg-on-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-fg-on-soft: var(--info-fg-on-soft);
+  --color-divider: var(--divider);
+  --color-input-bg: var(--input-bg);
+}
+
+:root {
+  /* --- Surface & Background --- */
+  --background: #F8FAFC;
+  --foreground: #0F172A;
+  --card: #FFFFFF;
+  --popover: #FFFFFF;
+  --surface-row: #F1F5F9;
+  --surface-dark: #1E293B;
+  --surface-dark-fg: #FFFFFF;
+  --input-bg: #FFFFFF;
+
+  /* --- Brand --- */
+  --primary: #1A56DB;
+  --primary-foreground: #FFFFFF;
+  --accent: #1A56DB;
+  --accent-hover: #1D4ED8;
+  --accent-soft: #E4E6EB;
+  --accent-foreground: #1A56DB;
+  --accent-fg-on-soft: #1E40AF;
+
+  /* --- Semantic Status --- */
+  --success: #22C55E;
+  --success-soft: #DCFCE7;
+  --success-fg-on-soft: #166534;
+  --warning: #F59E0B;
+  --warning-soft: #FEF3C7;
+  --warning-fg-on-soft: #92400E;
+  --danger: #EF4444;
+  --danger-soft: #FEE2E2;
+  --danger-fg-on-soft: #991B1B;
+  --info: #06B6D4;
+  --info-soft: #CFFAFE;
+  --info-fg-on-soft: #155E75;
+
+  /* --- Neutral --- */
+  --secondary: #F1F5F9;
+  --secondary-foreground: #0F172A;
+  --muted: #F1F5F9;
+  --muted-foreground: #64748B;
+  --accent-foreground: #0F172A;
+  --border: #E2E8F0;
+  --divider: #F1F5F9;
+  --input: #E2E8F0;
+  --ring: #64748B;
+  --destructive: #EF4444;
+
+  /* --- Typography --- */
+  --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, 'Courier New', monospace;
+  --font-heading: 'Inter', 'Segoe UI Semibold', system-ui, sans-serif;
+
+  --radius: 0.375rem;
+
+  /* Motion tokens */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 80ms;
+  --duration-normal: 120ms;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    min-width: 0;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    min-width: 0;
+    overflow-x: hidden;
+  }
+  html {
+    @apply font-sans antialiased;
+    min-width: 0;
+  }
+  img,
+  video,
+  canvas,
+  svg {
+    max-width: 100%;
+  }
+}
+
+/* --- Zebra row table helpers --- */
+@layer components {
+  .frost-table-row-even {
+    background-color: var(--card);
+  }
+  .frost-table-row-odd {
+    background-color: var(--surface-row);
+  }
+  .frost-table-row-hover:hover {
+    background-color: var(--surface-row);
+  }
+  .frost-grid-header {
+    background-color: var(--surface-dark);
+    color: var(--surface-dark-fg);
+    font-weight: 600;
+    font-size: 9pt;
+  }
+
+  /* Status badge flat tag (per spec: no rounded pill) */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 8px;
+    border-left: 3px solid var(--status-color, var(--foreground));
+    background-color: var(--status-bg, var(--secondary));
+    color: var(--status-color, var(--foreground));
+    font-weight: 600;
+    font-size: 8pt;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .status-badge--success {
+    --status-color: var(--success);
+    --status-bg: var(--success-soft);
+  }
+  .status-badge--warning {
+    --status-color: var(--warning);
+    --status-bg: var(--warning-soft);
+  }
+  .status-badge--danger {
+    --status-color: var(--danger);
+    --status-bg: var(--danger-soft);
+  }
+  .status-badge--info {
+    --status-color: var(--info);
+    --status-bg: var(--info-soft);
+  }
+  .status-badge--default {
+    --status-color: var(--muted-foreground);
+    --status-bg: var(--secondary);
+  }
+
+  /* Section eyebrow */
+  .section-eyebrow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-bottom: 8px;
+  }
+  .section-eyebrow__bar {
+    width: 4px;
+    height: 16px;
+    background-color: var(--accent);
+    border-radius: 1px;
+    flex-shrink: 0;
+  }
+  .section-eyebrow__label {
+    font-family: var(--font-heading);
+    font-weight: 600;
+    font-size: 9pt;
+    color: var(--foreground);
+    padding: 0 12px;
+    line-height: 16px;
+  }
+
+  /* Frost button shadow (per spec) */
+  .btn-frost-primary {
+    box-shadow: 2px 2px 4px rgba(26, 86, 219, 0.25);
+    transition: transform var(--duration-fast) var(--ease-out),
+                box-shadow var(--duration-fast) var(--ease-out),
+                background-color var(--duration-fast);
+  }
+  .btn-frost-primary:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 2px 3px 6px rgba(26, 86, 219, 0.35);
+  }
+  .btn-frost-primary:active:not(:disabled) {
+    transform: translateY(1px);
+    box-shadow: 1px 1px 3px rgba(26, 86, 219, 0.2);
+  }
+
+  /* Dark stats bar */
+  .stats-bar-dark {
+    background-color: var(--surface-dark);
+    color: var(--surface-dark-fg);
+    padding: 10px 16px;
+    font-size: 9pt;
+    font-family: var(--font-sans);
+  }
+
+  /* Token mask mono */
+  .token-mask {
+    font-family: var(--font-mono);
+    font-size: 9.5pt;
+    color: var(--muted-foreground);
+    letter-spacing: 0.01em;
+  }
+
+  /* Skeleton shimmer */
+  @keyframes frost-shimmer {
+    0%   { background-position: -200px 0; }
+    100% { background-position: calc(200px + 100%) 0; }
+  }
+  .skeleton-row {
+    background: linear-gradient(90deg, var(--surface-row) 0px, var(--card) 80px, var(--surface-row) 160px);
+    background-size: 200px 100%;
+    animation: frost-shimmer 1.2s ease-in-out infinite;
+    height: 28px;
+  }
+
+  /* Log console row tints */
+  .log-row--info    { background-color: color-mix(in srgb, var(--info-soft)   15%, transparent); }
+  .log-row--success { background-color: color-mix(in srgb, var(--success-soft) 15%, transparent); }
+  .log-row--warning { background-color: color-mix(in srgb, var(--warning-soft) 15%, transparent); }
+  .log-row--error   { background-color: color-mix(in srgb, var(--danger-soft)  15%, transparent); }
+}
+
+/* --- Sonner toast overrides (Frost) --- */
+:root {
+  --normal-bg: #FFFFFF;
+  --normal-border: #E2E8F0;
+  --normal-text: #0F172A;
+}
+.toast {
+  font-family: var(--font-sans);
+  font-size: 9pt;
+  border-radius: 6px;
+  border: 1px solid #E2E8F0;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.06), 0 2px 4px -1px rgba(0,0,0,0.04);
+}

@@ -1,0 +1,33 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+
+	handle_path /api/* {
+		reverse_proxy backend:8000
+	}
+
+	handle_path /docs* {
+		reverse_proxy backend:8000
+	}
+
+	handle_path /openapi.json {
+		reverse_proxy backend:8000
+	}
+
+	handle /remote/* {
+		reverse_proxy backend:8000
+	}
+
+	handle {
+		reverse_proxy frontend:3000
+	}
+}

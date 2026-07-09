@@ -1,0 +1,166 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>FlowMeta Connector</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f8fb;
+        --panel: #ffffff;
+        --text: #172033;
+        --muted: #64748b;
+        --line: #d8e0ea;
+        --primary: #2563eb;
+        --primary-strong: #1d4ed8;
+        --danger: #dc2626;
+        --ok: #16a34a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        width: 360px;
+        margin: 0;
+        padding: 14px;
+        font: 13px/1.4 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: var(--text);
+        background: var(--bg);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 16px;
+        letter-spacing: 0;
+      }
+      .version {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+      }
+      label {
+        display: block;
+        margin: 10px 0 5px;
+        font-weight: 650;
+      }
+      input,
+      select {
+        width: 100%;
+        height: 34px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 0 9px;
+        background: white;
+        color: var(--text);
+      }
+      button {
+        height: 34px;
+        border: 0;
+        border-radius: 6px;
+        padding: 0 11px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: default;
+        opacity: .55;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .primary {
+        background: var(--primary);
+        color: white;
+      }
+      .primary:hover {
+        background: var(--primary-strong);
+      }
+      .ghost {
+        background: #e8edf5;
+        color: #1f2937;
+      }
+      .status {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        width: max-content;
+        max-width: 100%;
+        min-height: 26px;
+        padding: 4px 9px;
+        border-radius: 999px;
+        background: #e8edf5;
+        color: #334155;
+        font-weight: 700;
+      }
+      .pill.ok {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .pill.err {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+      .pill.run {
+        background: #dbeafe;
+        color: #1e40af;
+      }
+      #status,
+      #debug {
+        color: var(--muted);
+        word-break: break-word;
+      }
+      #debug {
+        padding: 8px;
+        border-radius: 6px;
+        background: #eef3f8;
+        color: #334155;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>FlowMeta Connector</h1>
+      <div id="version" class="version"></div>
+    </header>
+
+    <section class="panel">
+      <label for="apiBase">Backend URL</label>
+      <input id="apiBase" value="http://localhost:8000" />
+
+      <label for="account">Facebook Account</label>
+      <select id="account">
+        <option value="">Loading accounts...</option>
+      </select>
+
+      <div class="row">
+        <button id="connect" class="primary">Connect</button>
+        <button id="stop" class="ghost">Stop</button>
+        <button id="reload" class="ghost">Reload</button>
+      </div>
+
+      <div class="status">
+        <div id="pill" class="pill">Idle</div>
+        <div id="status"></div>
+        <div id="debug"></div>
+      </div>
+    </section>
+    <script src="popup.js"></script>
+  </body>
+</html>

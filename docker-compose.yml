@@ -1,0 +1,170 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-flowmeta}
+      POSTGRES_USER: ${POSTGRES_USER:-flowmeta}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-flowmeta}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-flowmeta} -d ${POSTGRES_DB:-flowmeta}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmeta}:${POSTGRES_PASSWORD:-flowmeta}@postgres:5432/${POSTGRES_DB:-flowmeta}
+      REDIS_URL: redis://redis:6379/0
+      FERNET_KEY: ${FERNET_KEY:-3ZcWeflwVSVVjCXKbRquP8EDZzaGyHNKsT2fSaGYNK8=}
+      FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:-change-me-to-long-random-secret}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      META_APP_ID: ${META_APP_ID:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      AUTO_EXCHANGE_LONG_LIVED_TOKEN: ${AUTO_EXCHANGE_LONG_LIVED_TOKEN:-true}
+      BROWSER_PROFILE_DIR: ${BROWSER_PROFILE_DIR:-/app/browser-profiles}
+      UPLOAD_DIR: ${UPLOAD_DIR:-/app/uploads}
+      BROWSER_PROVIDER: ${BROWSER_PROVIDER:-kasm}
+      BROWSERLESS_WS_URL: ${BROWSERLESS_WS_URL:-ws://browserless:3000/chromium}
+      BROWSER_SESSION_TTL_SECONDS: ${BROWSER_SESSION_TTL_SECONDS:-1800}
+      MAX_BROWSER_SESSIONS_PER_USER: ${MAX_BROWSER_SESSIONS_PER_USER:-1}
+      MAX_BROWSER_SESSIONS_GLOBAL: ${MAX_BROWSER_SESSIONS_GLOBAL:-10}
+      REMOTE_BROWSER_PUBLIC_BASE_URL: ${REMOTE_BROWSER_PUBLIC_BASE_URL:-http://localhost:${BACKEND_PORT:-8000}}
+      KASM_IMAGE: ${KASM_IMAGE:-kasmweb/chrome:1.19.0}
+      KASM_DOCKER_NETWORK: ${KASM_DOCKER_NETWORK:-comment_edit_delete_default}
+      KASM_BROWSER_PROFILES_VOLUME: ${KASM_BROWSER_PROFILES_VOLUME:-comment_edit_delete_browser-profiles}
+      KASM_PUBLIC_SCHEME: ${KASM_PUBLIC_SCHEME:-https}
+      KASM_PUBLIC_HOST: ${KASM_PUBLIC_HOST:-localhost}
+      KASM_VNC_PASSWORD: ${KASM_VNC_PASSWORD:-flowmeta-session}
+      KASM_EMBED_CREDENTIALS_IN_URL: ${KASM_EMBED_CREDENTIALS_IN_URL:-true}
+      REMOTE_BROWSER_BASE_URL: ${REMOTE_BROWSER_BASE_URL:-http://localhost:${REMOTE_BROWSER_PORT:-3010}}
+      REMOTE_BROWSER_URL_TEMPLATE: ${REMOTE_BROWSER_URL_TEMPLATE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - backend-logs:/app/logs
+      - backend-uploads:/app/uploads
+      - browser-profiles:/app/browser-profiles
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmeta}:${POSTGRES_PASSWORD:-flowmeta}@postgres:5432/${POSTGRES_DB:-flowmeta}
+      REDIS_URL: redis://redis:6379/0
+      FERNET_KEY: ${FERNET_KEY:-3ZcWeflwVSVVjCXKbRquP8EDZzaGyHNKsT2fSaGYNK8=}
+      FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:-change-me-to-long-random-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backend-uploads:/app/uploads
+    restart: unless-stopped
+
+  browser-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.browser
+    command: ["python", "-m", "app.browser_worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmeta}:${POSTGRES_PASSWORD:-flowmeta}@postgres:5432/${POSTGRES_DB:-flowmeta}
+      REDIS_URL: redis://redis:6379/0
+      FERNET_KEY: ${FERNET_KEY:-3ZcWeflwVSVVjCXKbRquP8EDZzaGyHNKsT2fSaGYNK8=}
+      FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:-change-me-to-long-random-secret}
+      BROWSER_PROFILE_DIR: ${BROWSER_PROFILE_DIR:-/app/browser-profiles}
+      UPLOAD_DIR: ${UPLOAD_DIR:-/app/uploads}
+      BROWSER_WORKER_CONCURRENCY: ${BROWSER_WORKER_CONCURRENCY:-1}
+      BROWSERLESS_WS_URL: ${BROWSERLESS_WS_URL:-ws://browserless:3000/chromium}
+      REMOTE_BROWSER_BASE_URL: ${REMOTE_BROWSER_BASE_URL:-http://localhost:${REMOTE_BROWSER_PORT:-3010}}
+      REMOTE_BROWSER_URL_TEMPLATE: ${REMOTE_BROWSER_URL_TEMPLATE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      browserless:
+        condition: service_started
+    volumes:
+      - backend-uploads:/app/uploads
+      - browser-profiles:/app/browser-profiles
+    restart: unless-stopped
+
+  browserless:
+    image: ghcr.io/browserless/chromium:latest
+    user: root
+    environment:
+      CONCURRENT: ${BROWSERLESS_CONCURRENT:-5}
+      TIMEOUT: ${BROWSERLESS_TIMEOUT:-300000}
+      DATA_DIR: /app/browser-profiles
+    volumes:
+      - browser-profiles:/app/browser-profiles
+    expose:
+      - "3000"
+    shm_size: "1gb"
+    restart: unless-stopped
+
+  remote-browser:
+    profiles: ["dev-browser"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.remote-browser
+    environment:
+      REMOTE_BROWSER_PROFILE_DIR: /browser-profiles/shared
+      SCREEN_RESOLUTION: ${REMOTE_BROWSER_SCREEN:-1440x900x24}
+    volumes:
+      - browser-profiles:/browser-profiles
+    ports:
+      - "${REMOTE_BROWSER_PORT:-3010}:6080"
+    shm_size: "1gb"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  backend-logs:
+  backend-uploads:
+  browser-profiles:
