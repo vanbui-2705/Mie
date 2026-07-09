@@ -91,7 +91,7 @@ public sealed class FacebookGraphCommentService : ICommentService
             return new CommentResult(false, "Nội dung chỉnh sửa đang trống.");
         }
 
-        var url = $"{GraphApiOptions.BaseUrl}/{Uri.EscapeDataString(commentId)}";
+        var url = $"https://graph.facebook.com/{Uri.EscapeDataString(commentId)}";
         if (!string.IsNullOrWhiteSpace(imagePath) && File.Exists(imagePath))
         {
             return await EditWithImageAsync(httpClient, url, token, newText, imagePath, cancellationToken);
@@ -146,7 +146,7 @@ public sealed class FacebookGraphCommentService : ICommentService
         string token,
         CancellationToken cancellationToken)
     {
-        var url = $"{GraphApiOptions.BaseUrl}/{Uri.EscapeDataString(commentId)}?access_token={Uri.EscapeDataString(token)}";
+        var url = $"https://graph.facebook.com/{Uri.EscapeDataString(commentId)}?access_token={Uri.EscapeDataString(token)}";
         using var response = await httpClient.DeleteAsync(url, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
@@ -170,7 +170,7 @@ public sealed class FacebookGraphCommentService : ICommentService
             return new CommentResult(false, "Nội dung comment đang trống.");
         }
 
-        var url = $"{GraphApiOptions.BaseUrl}/{Uri.EscapeDataString(postId)}/comments";
+        var url = $"https://graph.facebook.com/{Uri.EscapeDataString(postId)}/comments";
         HttpContent content;
         FileStream? stream = null;
         try
@@ -278,7 +278,7 @@ public sealed class FacebookGraphCommentService : ICommentService
         {
             if (query.TryGetValue(key, out var queryValue) && !string.IsNullOrWhiteSpace(queryValue))
             {
-                return IsGraphObjectId(queryValue) ? queryValue : null;
+                return queryValue;
             }
         }
 
@@ -286,22 +286,11 @@ public sealed class FacebookGraphCommentService : ICommentService
         var postMatch = Regex.Match(path, @"(?:posts|videos|photos|permalink)/([^/?#]+)", RegexOptions.IgnoreCase);
         if (postMatch.Success)
         {
-            var postId = Uri.UnescapeDataString(postMatch.Groups[1].Value);
-            return IsGraphObjectId(postId) ? postId : null;
+            return Uri.UnescapeDataString(postMatch.Groups[1].Value);
         }
 
-        return null;
-    }
-
-    private static bool IsGraphObjectId(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return false;
-        }
-
-        var trimmed = value.Trim();
-        return Regex.IsMatch(trimmed, @"^\d{5,30}(?:_\d{5,30})?$", RegexOptions.CultureInvariant);
+        var pfbidMatch = Regex.Match(path, @"(pfbid[^/?#]+)", RegexOptions.IgnoreCase);
+        return pfbidMatch.Success ? Uri.UnescapeDataString(pfbidMatch.Groups[1].Value) : null;
     }
 
     private static Dictionary<string, string> ParseQuery(string query)

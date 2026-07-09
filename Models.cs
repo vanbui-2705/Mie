@@ -160,35 +160,6 @@ public sealed class AppSettings
     public int ProxyCheckIntervalSeconds { get; set; } = 5;
 }
 
-public static class GraphApiOptions
-{
-    private const string DefaultVersion = "v22.0";
-
-    public static string Version
-    {
-        get
-        {
-            var configured = Environment.GetEnvironmentVariable("FLOWMETA_GRAPH_API_VERSION");
-            return NormalizeVersion(configured);
-        }
-    }
-
-    public static string BaseUrl => $"https://graph.facebook.com/{Version}";
-
-    private static string NormalizeVersion(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return DefaultVersion;
-        }
-
-        var version = value.Trim();
-        return version.StartsWith("v", StringComparison.OrdinalIgnoreCase)
-            ? version
-            : $"v{version}";
-    }
-}
-
 public sealed class SavedProfileState
 {
     public string TokenStatus { get; set; } = "";

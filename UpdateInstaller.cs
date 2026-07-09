@@ -21,8 +21,6 @@ public static class UpdateInstaller
 setlocal
 set "SRC={downloadedExePath}"
 set "DST={currentExePath}"
-set "NEW={currentExePath}.new"
-set "BAK={currentExePath}.bak"
 set "PID={currentProcessId}"
 
 :wait
@@ -32,30 +30,8 @@ if not errorlevel 1 (
   goto wait
 )
 
-if not exist "%SRC%" exit /b 1
-copy /Y "%SRC%" "%NEW%" >nul
-if errorlevel 1 exit /b 1
-
-if exist "%BAK%" del /F /Q "%BAK%" >nul 2>nul
-move /Y "%DST%" "%BAK%" >nul
-if errorlevel 1 (
-  del "%NEW%" >nul 2>nul
-  exit /b 1
-)
-
-move /Y "%NEW%" "%DST%" >nul
-if errorlevel 1 (
-  move /Y "%BAK%" "%DST%" >nul 2>nul
-  del "%NEW%" >nul 2>nul
-  exit /b 1
-)
-
+copy /Y "%SRC%" "%DST%" >nul
 start "" "%DST%"
-if errorlevel 1 (
-  if exist "%BAK%" move /Y "%BAK%" "%DST%" >nul 2>nul
-  exit /b 1
-)
-
 del "%SRC%" >nul 2>nul
 del "%~f0" >nul 2>nul
 """;

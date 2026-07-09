@@ -10,7 +10,6 @@ public sealed class CommentTaskManager
     private readonly GraphCommentAuthorResolver _graphAuthorResolver;
     private readonly Random _random = new();
     private readonly object _statsSync = new();
-    private readonly object _runSync = new();
     private readonly ConcurrentDictionary<string, TokenIssueInfo> _blockedProfiles = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _cts;
     private int _logIndex;
@@ -33,16 +32,7 @@ public sealed class CommentTaskManager
 
     public TaskStats Stats { get; private set; } = new();
 
-    public bool IsRunning
-    {
-        get
-        {
-            lock (_runSync)
-            {
-                return _cts is not null;
-            }
-        }
-    }
+    public bool IsRunning => _cts is not null;
 
     public Task StartAsync(
         IReadOnlyList<CommentTaskInput> tasks,
@@ -53,12 +43,7 @@ public sealed class CommentTaskManager
         string? imageInput)
     {
         Stop();
-        var runCts = new CancellationTokenSource();
-        lock (_runSync)
-        {
-            _cts = runCts;
-        }
-
+        _cts = new CancellationTokenSource();
         _blockedProfiles.Clear();
         Stats = new TaskStats { Total = tasks.Count };
         StatsChanged?.Invoke(Stats);
@@ -70,7 +55,7 @@ public sealed class CommentTaskManager
         {
             try
             {
-                await RunGroupedByUidAsync(tasks, action, maxThreads, delaySettings, textVariants, images, runCts.Token);
+                await RunGroupedByUidAsync(tasks, action, maxThreads, delaySettings, textVariants, images, _cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -80,28 +65,15 @@ public sealed class CommentTaskManager
             }
             finally
             {
-                lock (_runSync)
-                {
-                    if (ReferenceEquals(_cts, runCts))
-                    {
-                        _cts = null;
-                    }
-                }
-
-                runCts.Dispose();
+                _cts?.Dispose();
+                _cts = null;
             }
-        }, runCts.Token);
+        }, _cts.Token);
     }
 
     public void Stop()
     {
-        CancellationTokenSource? cts;
-        lock (_runSync)
-        {
-            cts = _cts;
-        }
-
-        cts?.Cancel();
+        _cts?.Cancel();
     }
 
     private async Task RunGroupedByUidAsync(

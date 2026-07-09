@@ -50,7 +50,7 @@ public sealed class GraphCommentAuthorResolver
             Timeout = TimeSpan.FromSeconds(35)
         };
 
-        var url = $"{GraphApiOptions.BaseUrl}/{Uri.EscapeDataString(commentId)}?fields=id,from&access_token={Uri.EscapeDataString(token)}";
+        var url = $"https://graph.facebook.com/v19.0/{Uri.EscapeDataString(commentId)}?fields=id,from&access_token={Uri.EscapeDataString(token)}";
         using var response = await httpClient.GetAsync(url, cancellationToken);
         var body = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
