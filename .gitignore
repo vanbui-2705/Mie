@@ -27,3 +27,6 @@ Desktop.ini
 *.dpapi
 *.key
 *.token
+.env
+.env.*
+.secrets/

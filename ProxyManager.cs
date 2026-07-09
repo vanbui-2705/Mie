@@ -80,6 +80,17 @@ public sealed class ProxyManager
     public void Start()
     {
         CancelRunning();
+        lock (_sync)
+        {
+            if (_states.Count == 0)
+            {
+                _nextProxyIndex = 0;
+                _getNewVersions.Clear();
+                StateChanged?.Invoke();
+                return;
+            }
+        }
+
         _cts = new CancellationTokenSource();
         lock (_sync)
         {
@@ -218,10 +229,7 @@ public sealed class ProxyManager
                     .ToList();
             }
 
-            foreach (var key in keys)
-            {
-                await GetNewProxyForKeyAsync(key, cancellationToken);
-            }
+            await Task.WhenAll(keys.Select(key => GetNewProxyForKeyAsync(key, cancellationToken)));
 
             try
             {
@@ -249,10 +257,7 @@ public sealed class ProxyManager
                 .ToList();
         }
 
-        foreach (var key in keys)
-        {
-            await CheckCurrentProxyForKeyAsync(key, cancellationToken);
-        }
+        await Task.WhenAll(keys.Select(key => CheckCurrentProxyForKeyAsync(key, cancellationToken)));
     }
 
     private async Task CheckCurrentProxyForKeyAsync(string apiKey, CancellationToken cancellationToken)

@@ -30,6 +30,10 @@ public partial class Form1 : Form
     private readonly GitHubUpdateChecker _updateChecker = new();
     private readonly CommentTaskManager _taskManager;
     private readonly Dictionary<string, DataGridViewRow> _logRowsByKey = new(StringComparer.OrdinalIgnoreCase);
+    private Action? _proxyStateChangedHandler;
+    private Action<TaskLogEntry>? _taskLogAddedHandler;
+    private Action<TaskStats>? _taskStatsChangedHandler;
+    private Action<string, string, string>? _profileStatusChangedHandler;
     private AppSettings _settings;
     private bool _tasksStoppedByUser;
     private string _logSortColumnName = "Index";
@@ -893,14 +897,19 @@ public partial class Form1 : Form
 
     private void WireEvents()
     {
-        _proxyManager.StateChanged += () => Ui(() =>
+        _proxyStateChangedHandler = () => Ui(() =>
         {
             RefreshProxyGrid();
             UpdateProxyButtons();
         });
-        _taskManager.LogAdded += entry => Ui(() => AddLog(entry));
-        _taskManager.StatsChanged += stats => Ui(() => UpdateStats(stats));
-        _taskManager.ProfileStatusChanged += (uid, status, error) => Ui(() => UpdateProfileStatusRow(uid, status, error));
+        _taskLogAddedHandler = entry => Ui(() => AddLog(entry));
+        _taskStatsChangedHandler = stats => Ui(() => UpdateStats(stats));
+        _profileStatusChangedHandler = (uid, status, error) => Ui(() => UpdateProfileStatusRow(uid, status, error));
+
+        _proxyManager.StateChanged += _proxyStateChangedHandler;
+        _taskManager.LogAdded += _taskLogAddedHandler;
+        _taskManager.StatsChanged += _taskStatsChangedHandler;
+        _taskManager.ProfileStatusChanged += _profileStatusChangedHandler;
 
         _proxyCountdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
         _proxyCountdownTimer.Tick += (_, _) => UpdateProxyExpiryCountdown();
@@ -914,6 +923,33 @@ public partial class Form1 : Form
         _networkGuardTimer = new System.Windows.Forms.Timer { Interval = 30000 };
         _networkGuardTimer.Tick += async (_, _) => await CheckNetworkWhileRunningAsync();
         _networkGuardTimer.Start();
+    }
+
+    private void UnwireEvents()
+    {
+        if (_proxyStateChangedHandler is not null)
+        {
+            _proxyManager.StateChanged -= _proxyStateChangedHandler;
+            _proxyStateChangedHandler = null;
+        }
+
+        if (_taskLogAddedHandler is not null)
+        {
+            _taskManager.LogAdded -= _taskLogAddedHandler;
+            _taskLogAddedHandler = null;
+        }
+
+        if (_taskStatsChangedHandler is not null)
+        {
+            _taskManager.StatsChanged -= _taskStatsChangedHandler;
+            _taskStatsChangedHandler = null;
+        }
+
+        if (_profileStatusChangedHandler is not null)
+        {
+            _taskManager.ProfileStatusChanged -= _profileStatusChangedHandler;
+            _profileStatusChangedHandler = null;
+        }
     }
 
     private void UpdateProxyButtons()
@@ -2281,6 +2317,7 @@ public partial class Form1 : Form
             _networkGuardTimer?.Dispose();
             _taskManager.Stop();
             _proxyManager.Stop();
+            UnwireEvents();
             base.OnFormClosing(e);
             return;
         }
@@ -2308,6 +2345,7 @@ public partial class Form1 : Form
         _networkGuardTimer?.Dispose();
         _taskManager.Stop();
         _proxyManager.Stop();
+        UnwireEvents();
         base.OnFormClosing(e);
     }
 }

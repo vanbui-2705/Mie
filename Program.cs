@@ -33,7 +33,7 @@ static class Program
         var startupUpdateCheck = CheckStartupNetworkAndUpdates(updateChecker);
         if (!startupUpdateCheck)
         {
-            return;
+            // Update/network check is non-blocking. Users can still run direct mode without proxy.
         }
 
         var licenseManager = new LicenseManager();

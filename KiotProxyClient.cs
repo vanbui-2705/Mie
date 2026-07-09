@@ -59,7 +59,7 @@ public sealed class KiotProxyClient
 
     private static ProxyEndpoint ParseProxyResponse(string body)
     {
-        using var document = JsonDocument.Parse(body);
+        using var document = ParseProxyJson(body);
         var root = document.RootElement;
         if (root.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.False)
         {
@@ -111,6 +111,23 @@ public sealed class KiotProxyClient
             ApiStatus = apiStatus,
             ApiMessage = apiMessage
         };
+    }
+
+    private static JsonDocument ParseProxyJson(string body)
+    {
+        try
+        {
+            return JsonDocument.Parse(body);
+        }
+        catch (JsonException ex)
+        {
+            var message = NormalizeErrorMessage(body);
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(message)
+                    ? "KiotProxy tra ve phan hoi khong phai JSON."
+                    : $"KiotProxy tra ve phan hoi khong phai JSON: {message}",
+                ex);
+        }
     }
 
     private static ProxyEndpoint? ParseProxyText(string value)
