@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "FlowMeta Connector",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "description": "Run FlowMeta Facebook jobs in the user's real browser.",
   "permissions": ["storage", "tabs", "scripting"],
   "host_permissions": [
     "http://localhost:8000/*",
+    "https://*.trycloudflare.com/*",
     "https://www.facebook.com/*",
     "https://facebook.com/*"
   ],

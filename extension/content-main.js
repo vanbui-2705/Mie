@@ -1,5 +1,5 @@
 ﻿(() => {
-  const VERSION = "0.1.35";
+  const VERSION = "0.1.36";
   if (window.__FLOWMETA_MAIN_VERSION === VERSION) return;
   window.__FLOWMETA_MAIN_VERSION = VERSION;
 
