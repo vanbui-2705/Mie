@@ -5,7 +5,7 @@ import { TopBar } from "./TopBar";
 import { usePathname } from "next/navigation";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 
-const PUBLIC_PATHS = new Set(["/login", "/register", "/forgot-password", "/reset-password", "/auth/callback"]);
+const PUBLIC_PATHS = new Set(["/", "/login", "/register", "/forgot-password", "/reset-password", "/auth/callback"]);
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
   return <AuthProvider><AuthenticatedShell>{children}</AuthenticatedShell></AuthProvider>;
