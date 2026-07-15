@@ -2,13 +2,10 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
 import { ProxyGrid } from "@/components/proxy/ProxyGrid";
 import { ProxyControls } from "@/components/proxy/ProxyControls";
 import { SectionEyebrow } from "@/components/shared/SectionEyebrow";
-import { Globe2, Trash2, Play, Square } from "lucide-react";
+import { Trash2, Play, Square } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";
 import { toast } from "sonner";
 import type { ProxyKeyState, AppSettings } from "@/types";
@@ -74,7 +71,7 @@ export default function ProxyPage() {
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  const [deleting] = useState(false);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -93,7 +90,8 @@ export default function ProxyPage() {
   }, []);
 
   useEffect(() => {
-    loadAll();
+    const timer = setTimeout(() => void loadAll(), 0);
+    return () => clearTimeout(timer);
   }, [loadAll]);
 
   const handleSave = async () => {

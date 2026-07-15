@@ -7,21 +7,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crypto import decrypt, encrypt
 from app.db.postgres import get_session
-from app.models.sqlmodels import AppSetting
+from app.models.sqlmodels import AppSetting, User
+from app.rbac import require_permission
 from app.schemas import AppSettingsResponse, AppSettingsUpdate
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 @router.get("", response_model=AppSettingsResponse)
-async def get_settings(session: AsyncSession = Depends(get_session)):
+async def get_settings(
+    user: User = Depends(require_permission("settings:read")),
+    session: AsyncSession = Depends(get_session),
+):
     result = await session.execute(
-        select(AppSetting).where(AppSetting.id == 1)
+        select(AppSetting).where(AppSetting.user_id == user.id)
     )
     row = result.scalar_one_or_none()
     if row is None:
         # bootstrap singleton
-        row = AppSetting(id=1)
+        row = AppSetting(user_id=user.id)
         session.add(row)
         await session.commit()
         await session.refresh(row)
@@ -43,7 +47,11 @@ async def get_settings(session: AsyncSession = Depends(get_session)):
 
 
 @router.put("", response_model=dict)
-async def update_settings(body: AppSettingsUpdate, session: AsyncSession = Depends(get_session)):
+async def update_settings(
+    body: AppSettingsUpdate,
+    user: User = Depends(require_permission("settings:update")),
+    session: AsyncSession = Depends(get_session),
+):
     values: dict = {}
     if body.interaction_threads:
         values["interaction_threads"] = body.interaction_threads
@@ -68,7 +76,7 @@ async def update_settings(body: AppSettingsUpdate, session: AsyncSession = Depen
 
     if values:
         await session.execute(
-            update(AppSetting).where(AppSetting.id == 1).values(**values)
+            update(AppSetting).where(AppSetting.user_id == user.id).values(**values)
         )
         await session.commit()
     return {"updated": True}

@@ -1,5 +1,5 @@
 ﻿(() => {
-  const VERSION = "0.1.18";
+  const VERSION = "0.1.35";
   if (window.__FLOWMETA_MAIN_VERSION === VERSION) return;
   window.__FLOWMETA_MAIN_VERSION = VERSION;
 
@@ -153,6 +153,7 @@
     await wait(2200);
     if (isLoginPage()) return { success: false, message: "Facebook is not logged in. Please log in with this browser." };
     if (looksCheckpoint()) return { success: false, message: "Facebook checkpoint/security verification is required." };
+    if (String(job?.type || "").startsWith("share_to_")) return await runFlowMetaShareJob(job);
 
     const kind = composerKind(job);
     const opened = await findComposer({ kind, attempts: 40 });
@@ -206,6 +207,632 @@
     if (sourceUrl) return `${message}\n\n${sourceUrl}`.trim();
     if (link) return `${message}\n\n${link}`.trim();
     return message;
+  }
+
+  async function runFlowMetaShareJob(job) {
+    const targetKind = String(job?.target_kind || "");
+    const sourceUrl = String(job?.source_url || location.href);
+    if (job?.source_url && !urlsReferToSamePost(location.href, sourceUrl) && !findSourcePostScope(sourceUrl)) {
+      return {
+        success: false,
+        navigation_url: sourceUrl,
+        message: `Cần mở bài nguồn ${sourceUrl} trước khi chạy native Share.`,
+      };
+    }
+    const attemptedTriggers = new Set();
+    let shareTrigger = null;
+    let identityCheck = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      shareTrigger = await findShareTrigger(18, sourceUrl, attemptedTriggers);
+      if (!shareTrigger) break;
+      attemptedTriggers.add(shareTrigger.element);
+      const previousSurfaces = new Set(findVisibleShareSurfaces());
+      clickLikeUser(shareTrigger.element);
+      await wait(1800);
+      identityCheck = await verifyOpenedShareIdentity(sourceUrl, shareTrigger, previousSurfaces, 4500);
+      if (identityCheck.success) break;
+      await dismissWrongShareSurface();
+      shareTrigger = null;
+    }
+    if (!shareTrigger) {
+      const detail = identityCheck?.message
+        ? ` ${identityCheck.message}`
+        : ` Không anchor được article của bài nguồn sau khi Facebook chuyển tới ${location.href}.`;
+      return { success: false, message: `Không tìm thấy đúng nút Share/Chia sẻ của bài nguồn.${detail}` };
+    }
+
+    const shareKind = targetKind === "group" ? "group" : "page";
+    const optionClicked = await chooseShareDestinationType(shareKind);
+    if (!optionClicked) {
+      return { success: false, message: `Không thấy lựa chọn share sang ${shareKind === "group" ? "Group" : "Page"} trong menu Share của Facebook.` };
+    }
+
+    const targetName = String(job?.target_name || job?.target_url || "");
+    const selectedTarget = await selectShareDestination(targetName, String(job?.target_url || ""), shareKind);
+    if (!selectedTarget) {
+      return { success: false, message: `Không thấy target URL ${job?.target_url || targetName || ""} trong danh sách native Share của Facebook. Kiểm tra tài khoản có quyền share tới Page/Group này.` };
+    }
+
+    const caption = String(job?.message || "");
+    if (caption) {
+      const textbox = await waitFor(() => findComposerTextbox(findPostDialog()) || findComposerTextbox(), 10000);
+      if (textbox) {
+        activateTextbox(textbox);
+        await wait(300);
+        document.execCommand("insertText", false, caption);
+        notifyComposerChanged(textbox);
+        await wait(700);
+      }
+    }
+
+    const submitted = await clickShareSubmitButton();
+    if (!submitted?.success) return submitted;
+    await wait(3000);
+    return {
+      success: true,
+      pending_review: shareKind === "group" && looksPendingReview(),
+      message: "Đã gửi thao tác share thật qua Facebook UI.",
+      post_url: sourceUrl,
+    };
+  }
+
+  async function findShareTrigger(maxAttempts, sourceUrl, excluded = new Set()) {
+    const patterns = [
+      /^share$/,
+      /^chia se$/,
+      /send this to friends or post it/i,
+      /gui noi dung nay cho ban be/i,
+    ];
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const anchored = findSourcePostScope(sourceUrl);
+      if (!anchored && facebookPostIdentityTokens(sourceUrl).length) {
+        if (attempt === 0) window.scrollTo({ top: 0, behavior: "instant" });
+        else window.scrollBy({ top: attempt < 6 ? 360 : 620, behavior: "instant" });
+        await wait(300);
+        continue;
+      }
+      const scope = anchored?.scope || document.querySelector("[role='main']") || document.body;
+      const candidates = [...scope.querySelectorAll("div[role='button'], button, span, a[role='link'], [aria-label], [data-visualcompletion]")]
+        .filter(isVisible)
+        .filter((element) => !isBadRegion(element, { allowPostActions: true }))
+        .filter((element) => !excluded.has(closestClickable(element)));
+      const found = findBestShareElement(candidates, patterns);
+      if (found) {
+        const clickable = closestClickable(found);
+        clickable.scrollIntoView?.({ block: "center", inline: "center" });
+        await wait(400);
+        return { element: clickable, scope, sourceVerified: Boolean(anchored?.verified) };
+      }
+      if (anchored) {
+        anchored.scope.scrollIntoView?.({ block: "center", inline: "center" });
+      } else if (attempt === 0) window.scrollTo({ top: 0, behavior: "instant" });
+      else if (attempt < 6) window.scrollBy({ top: 360, behavior: "instant" });
+      else window.scrollBy({ top: 620, behavior: "instant" });
+      await wait(300);
+    }
+    return null;
+  }
+
+  function findSourcePostScope(sourceUrl) {
+    const identityUrls = sourceIdentityUrls(sourceUrl);
+    const visibleDialogs = [...document.querySelectorAll("div[role='dialog']")]
+      .filter(isVisible)
+      .filter((dialog) => !isBadRegion(dialog, { allowPostActions: true }));
+    const matchingDialog = visibleDialogs.find((dialog) =>
+      identityUrls.some((identityUrl) => elementContainsSourceIdentity(dialog, identityUrl))
+    );
+    if (matchingDialog) return { scope: matchingDialog, verified: true };
+
+    const matchingLink = [...document.querySelectorAll("a[href]")]
+      .filter(isVisible)
+      .find((link) => identityUrls.some((identityUrl) => urlsReferToSamePost(link.href, identityUrl)));
+    if (matchingLink) {
+      return {
+        scope: matchingLink.closest("[role='article'], article, div[role='dialog']") || matchingLink.parentElement,
+        verified: true,
+      };
+    }
+
+    const postDialog = visibleDialogs.find((dialog) => dialog.querySelector("[role='article'], article"));
+    if (postDialog && isLikelyFacebookPostUrl(location.href)) {
+      return { scope: postDialog, verified: true };
+    }
+
+    if (isLikelyFacebookPostUrl(location.href)) {
+      const articles = [...document.querySelectorAll("[role='main'] [role='article'], [role='main'] article")].filter(isVisible);
+      const matchingArticle = articles.find((article) =>
+        identityUrls.some((identityUrl) => elementContainsSourceIdentity(article, identityUrl))
+      );
+      if (matchingArticle) return { scope: matchingArticle, verified: true };
+      if (articles.length === 1) return { scope: articles[0], verified: true };
+      const articlesWithShare = articles.filter((article) => articleContainsShareAction(article));
+      if (articlesWithShare.length === 1) return { scope: articlesWithShare[0], verified: true };
+    }
+    return null;
+  }
+
+  function sourceIdentityUrls(sourceUrl) {
+    const urls = [String(sourceUrl || "")].filter(Boolean);
+    const currentUrl = String(location.href || "");
+    if (currentUrl && isLikelyFacebookPostUrl(currentUrl)) urls.push(currentUrl);
+    return [...new Set(urls)];
+  }
+
+  function isLikelyFacebookPostUrl(value) {
+    try {
+      const url = new URL(String(value || ""), location.href);
+      if (!/(^|\.)facebook\.com$/i.test(url.hostname)) return false;
+      if (facebookPostIdentityTokens(url.href).length) return true;
+      return /\/(?:permalink|story|photo)\.php$/i.test(url.pathname);
+    } catch {
+      return false;
+    }
+  }
+
+  function articleContainsShareAction(article) {
+    const patterns = [/^share$/, /^chia se$/, /send this to friends or post it/i, /gui noi dung nay cho ban be/i];
+    const candidates = [...article.querySelectorAll("div[role='button'], button, span, [aria-label]")]
+      .filter(isVisible)
+      .filter((element) => !isBadRegion(element, { allowPostActions: true }));
+    return Boolean(findBestShareElement(candidates, patterns));
+  }
+
+  function findVisibleShareSurfaces() {
+    return [...document.querySelectorAll("div[role='dialog'], div[role='menu']")]
+      .filter(isVisible)
+      .filter((surface) => !isBadRegion(surface, { allowPostActions: true, allowSearch: true }));
+  }
+
+  async function verifyOpenedShareIdentity(sourceUrl, trigger, previousSurfaces, timeoutMs) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const surfaces = findVisibleShareSurfaces();
+      const openedSurfaces = surfaces.filter((surface) => !previousSurfaces.has(surface));
+      const identitySurface = openedSurfaces.find((surface) =>
+        sourceIdentityUrls(sourceUrl).some((identityUrl) => elementContainsSourceIdentity(surface, identityUrl))
+      );
+      if (identitySurface) return { success: true, method: "share_surface_identity" };
+
+      const activeSurface = openedSurfaces[openedSurfaces.length - 1];
+      if (activeSurface && trigger.sourceVerified && trigger.scope.contains(trigger.element)) {
+        return { success: true, method: "anchored_source_post" };
+      }
+      await wait(250);
+    }
+    return {
+      success: false,
+      message: `Dialog Share vừa mở không khớp bài nguồn ${sourceUrl}; đã thử nút Share khác.`,
+    };
+  }
+
+  async function dismissWrongShareSurface() {
+    const target = document.activeElement || document.body;
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
+    target.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", code: "Escape", bubbles: true, cancelable: true }));
+    await wait(700);
+  }
+
+  function elementContainsSourceIdentity(element, sourceUrl) {
+    if (!element) return false;
+    const matchingLink = [...element.querySelectorAll("a[href]")]
+      .some((link) => urlsReferToSamePost(link.href, sourceUrl));
+    if (matchingLink) return true;
+    const tokens = facebookPostIdentityTokens(sourceUrl);
+    const text = searchableText(element);
+    return tokens.some((token) => token.length >= 6 && text.includes(normalizeText(token)));
+  }
+
+  function urlsReferToSamePost(candidateUrl, sourceUrl) {
+    const sourceTokens = facebookPostIdentityTokens(sourceUrl);
+    const candidateTokens = facebookPostIdentityTokens(candidateUrl);
+    if (sourceTokens.length && candidateTokens.length) {
+      return sourceTokens.some((token) => candidateTokens.includes(token));
+    }
+    try {
+      const source = new URL(String(sourceUrl || ""), location.href);
+      const candidate = new URL(String(candidateUrl || ""), location.href);
+      return normalizeFacebookPath(source.pathname) === normalizeFacebookPath(candidate.pathname);
+    } catch {
+      return false;
+    }
+  }
+
+  function facebookPostIdentityTokens(value) {
+    try {
+      const url = new URL(String(value || ""), location.href);
+      const tokens = [];
+      for (const key of ["story_fbid", "fbid", "v"]) {
+        const token = String(url.searchParams.get(key) || "").trim().toLowerCase();
+        if (token) tokens.push(token);
+      }
+      const parts = normalizeFacebookPath(url.pathname).split("/").filter(Boolean);
+      for (const marker of ["posts", "videos", "reel"]) {
+        const index = parts.indexOf(marker);
+        if (index >= 0 && parts[index + 1]) tokens.push(parts[index + 1]);
+      }
+      if (parts[0] === "share" && ["p", "r", "v"].includes(parts[1]) && parts[2]) {
+        tokens.push(parts[2]);
+      }
+      return [...new Set(tokens)];
+    } catch {
+      return [];
+    }
+  }
+
+  function normalizeFacebookPath(value) {
+    return decodeURIComponent(String(value || ""))
+      .toLowerCase()
+      .replace(/\/+$/, "")
+      .replace(/^\/(?:www\.)?facebook\.com/i, "");
+  }
+
+  function findBestShareElement(candidates, patterns) {
+    const exact = candidates.find((element) => {
+      const text = searchableText(element);
+      return patterns.some((pattern) => pattern.test(text));
+    });
+    if (exact) return exact;
+    const aria = candidates.find((element) => {
+      const label = normalizeText([
+        element.getAttribute?.("aria-label") || "",
+        element.getAttribute?.("title") || "",
+      ].join(" "));
+      return /(^| )share( |$)|(^| )chia se( |$)/.test(label);
+    });
+    if (aria) return aria;
+    return candidates.find((element) => {
+      const text = searchableText(element);
+      if (!/(^| )share( |$)|(^| )chia se( |$)/.test(text)) return false;
+      const clickable = closestClickable(element);
+      const label = searchableText(clickable);
+      return !/comment|reply|binh luan|tra loi|send|gui rieng|messenger/.test(label);
+    }) || null;
+  }
+
+  async function chooseShareDestinationType(kind) {
+    const patterns = kind === "group"
+      ? [
+        /share to a group/,
+        /share in a group/,
+        /share to a group you/i,
+        /share with a group/,
+        /chia se vao nhom/,
+        /chia se len nhom/,
+        /chia se den nhom/,
+        /chia se toi nhom/,
+      ]
+      : [/share to a page/, /share as a page/, /chia se len trang/, /chia se toi trang/];
+    // Only inspect the native Share overlays. Searching the entire Facebook page
+    // can click the global "Groups/Nhóm" navigation item and leave the share flow.
+    const clicked = await clickFirstMatchingMenuItem(patterns, 12000, { overlayOnly: true });
+    if (clicked) return true;
+    const directDialog = findPostDialog();
+    return Boolean(directDialog && kind === "page");
+  }
+
+  async function clickFirstMatchingMenuItem(patterns, timeoutMs, options = {}) {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      const roots = options.overlayOnly ? findVisibleShareSurfaces() : [document];
+      const candidates = [...new Set(roots.flatMap((root) => [
+        ...(root.matches?.("div[role='menuitem'], div[role='button'], button") ? [root] : []),
+        ...root.querySelectorAll("div[role='menuitem'], div[role='button'], button, span"),
+      ]))]
+        .filter(isVisible)
+        .filter((element) => !isBadRegion(element, options));
+      const item = candidates.find((element) => patterns.some((pattern) => pattern.test(searchableText(element))));
+      if (item) {
+        clickLikeUser(closestClickable(item));
+        await wait(1400);
+        return true;
+      }
+      await wait(300);
+    }
+    return false;
+  }
+
+  async function selectShareDestination(targetName, targetUrl, kind) {
+    const queries = shareTargetQueries(targetName, targetUrl);
+    const urlKeys = shareTargetUrlKeys(targetUrl);
+    if (!queries.length) return false;
+    if (kind === "page") {
+      await clickFirstMatchingMenuItem([
+        /select a page/, /choose a page/, /page you manage/,
+        /chon trang/, /lua chon trang/, /trang ban quan ly/,
+      ], 3500, { allowSearch: true, overlayOnly: true });
+    }
+    const searchBox = await waitFor(() => findShareSearchInput(findActiveShareSurface()), 7000);
+    const searchQuery = shareTargetSearchQuery(targetName, targetUrl);
+    if (searchBox && searchQuery) {
+      setEditableText(searchBox, searchQuery);
+      const committed = await waitFor(() => editableValue(searchBox) === searchQuery, 2500);
+      if (!committed) return false;
+      await wait(1800);
+    }
+    const clicked = await clickShareTargetResult(queries, urlKeys, 15000);
+    return Boolean(clicked);
+  }
+
+  function findShareSearchInput(root) {
+    const surface = root && root !== document ? root : null;
+    if (!surface) return null;
+    const selectors = [
+      "input[type='search']",
+      "input[placeholder]",
+      "div[role='textbox'][contenteditable='true']",
+    ];
+    for (const selector of selectors) {
+      const found = [...surface.querySelectorAll(selector)]
+        .filter(isVisible)
+        .filter((element) => !isBadRegion(element, { allowSearch: true }))
+        .find((element) => {
+          if (element instanceof HTMLInputElement && element.type === "search") return true;
+          const ownLabel = normalizeText([
+            element.getAttribute?.("aria-label") || "",
+            element.getAttribute?.("placeholder") || "",
+            element.getAttribute?.("title") || "",
+          ].join(" "));
+          return /search|tim kiem/.test(ownLabel);
+        });
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function editableValue(element) {
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+      return String(element.value || "").trim();
+    }
+    return String(element.textContent || "").trim();
+  }
+
+  async function clickShareTargetResult(queries, urlKeys, timeoutMs) {
+    const needles = queries.map(normalizeText).filter(Boolean);
+    const started = Date.now();
+    let attempts = 0;
+    while (Date.now() - started < timeoutMs) {
+      const surface = findActiveShareSurface();
+      const resultRoots = shareTargetResultRoots(surface);
+      const candidates = [...new Set(resultRoots.flatMap((root) => [
+        ...root.querySelectorAll("div[role='option'], div[role='radio'], div[role='menuitem'], div[role='button'], a[role='link'], li, span"),
+      ]))]
+        .filter(isVisible)
+        .filter((element) => !isBadRegion(element, { allowSearch: true }));
+      const nameItems = candidates
+        .filter((element) => {
+          const text = searchableText(element);
+          return needles.some((needle) => shareTargetTextMatches(text, needle));
+        })
+        .sort((left, right) => searchableText(left).length - searchableText(right).length);
+      const nameItem = nameItems[0] || null;
+      const urlItem = candidates.find((element) => elementMatchesTargetUrl(element, urlKeys))
+        || candidates.find((element) => elementInnerTextContainsSlug(element, urlKeys));
+      const item = nameItem || urlItem;
+      if (item) {
+        clickLikeUser(closestClickable(item));
+        await wait(1400);
+        return true;
+      }
+      attempts += 1;
+      if (attempts % 3 === 0) scrollShareTargetList(surface);
+      await wait(300);
+    }
+    return false;
+  }
+
+  function shareTargetResultRoots(activeSurface) {
+    const overlays = [...document.querySelectorAll("div[role='listbox'], div[role='menu'], div[role='dialog']")]
+      .filter(isVisible)
+      .filter((element) => !isBadRegion(element, { allowSearch: true }));
+    return [...new Set([activeSurface, ...overlays, document].filter(Boolean))];
+  }
+
+  function shareTargetTextMatches(text, needle) {
+    if (!text || !needle) return false;
+    if (text === needle) return true;
+    const remainder = text.slice(needle.length).trimStart();
+    if (!text.startsWith(needle) || !remainder) return false;
+    return /^(?:[•(\-|]|joined\b|member\b|public group\b|private group\b|nhom\b|thanh vien\b|da tham gia\b|\d)/.test(remainder);
+  }
+
+  async function clickShareSubmitButton() {
+    const patterns = [
+      /^share$/, /^share now(?: \([^)]*\))?$/, /^share post$/,
+      /^chia se$/, /^chia se ngay(?: \([^)]*\))?$/, /^chia se bai viet$/, /^chia se den nhom$/, /^chia se ngay len nhom$/,
+      /^post$/, /^post now$/, /^dang$/, /^dang ngay$/, /^dang len nhom$/, /^dang ngay len nhom$/, /^publish$/,
+    ];
+    const started = Date.now();
+    let sawSubmitButton = false;
+    while (Date.now() - started < 15000) {
+      const match = findFinalShareSubmitButton(patterns);
+      const button = match?.button || null;
+      const surface = match?.surface || null;
+      if (button) {
+        sawSubmitButton = true;
+        button.scrollIntoView?.({ block: "center", inline: "center" });
+        button.focus?.();
+        dispatchSubmitPointerEvents(button);
+        clickLikeUser(button);
+        const accepted = await waitFor(() => (
+          !button.isConnected
+          || (surface && !surface.isConnected)
+          || !isVisible(button)
+          || (surface && !isVisible(surface))
+        ), 5000);
+        if (accepted) return { success: true };
+      }
+      await wait(300);
+    }
+    return {
+      success: false,
+      message: sawSubmitButton
+        ? "Đã thấy nút Đăng nhưng Facebook chưa nhận thao tác hoặc dialog chưa đóng."
+        : "Không tìm thấy nút Đăng cuối cùng trong dialog Tạo bài viết.",
+    };
+  }
+
+  function findFinalShareSubmitButton(patterns) {
+    const candidates = [...document.querySelectorAll("div[role='button'], button, [aria-label][role='button']")]
+      .filter(isVisible)
+      .filter((button) => button.getAttribute("aria-disabled") !== "true" && !button.hasAttribute("disabled"))
+      .map((button) => {
+        const surface = button.closest("div[role='dialog']");
+        const labels = [
+          normalizeText(button.getAttribute?.("aria-label") || ""),
+          normalizeText(button.getAttribute?.("title") || ""),
+          normalizeText(button.textContent || ""),
+        ].filter(Boolean);
+        const surfaceText = normalizeText(surface?.textContent || "");
+        const isComposerDialog = /tao bai viet|create post/.test(surfaceText);
+        const exactAccessibleLabel = labels.slice(0, 2)
+          .some((label) => patterns.some((pattern) => pattern.test(label)));
+        const bottom = button.getBoundingClientRect().bottom;
+        return {
+          button,
+          surface,
+          labels,
+          score: (surface && isVisible(surface) ? 10000 : 0)
+            + (isComposerDialog ? 1000 : 0)
+            + (exactAccessibleLabel ? 100 : 0)
+            + Math.max(0, bottom),
+        };
+      })
+      .filter(({ surface, labels }) => (
+        surface
+        && isVisible(surface)
+        && labels.some((label) => patterns.some((pattern) => pattern.test(label)))
+      ))
+      .sort((left, right) => right.score - left.score);
+    return candidates[0] || null;
+  }
+
+  function dispatchSubmitPointerEvents(element) {
+    if (typeof PointerEvent !== "function") return;
+    const rect = element.getBoundingClientRect();
+    const options = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      clientX: rect.left + Math.max(1, rect.width / 2),
+      clientY: rect.top + Math.max(1, rect.height / 2),
+    };
+    element.dispatchEvent(new PointerEvent("pointerover", options));
+    element.dispatchEvent(new PointerEvent("pointerenter", { ...options, bubbles: false }));
+    element.dispatchEvent(new PointerEvent("pointerdown", options));
+    element.dispatchEvent(new PointerEvent("pointerup", options));
+  }
+
+  function shareTargetQuery(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    try {
+      const url = new URL(raw);
+      const parts = url.pathname.split("/").filter(Boolean);
+      return decodeURIComponent(parts[parts.length - 1] || parts[0] || raw);
+    } catch {
+      return raw.replace(/^https?:\/\/(www\.)?facebook\.com\//i, "").replace(/^groups\//i, "").split(/[/?#]/)[0] || raw;
+    }
+  }
+
+  function shareTargetQueries(targetName, targetUrl) {
+    return [...new Set([targetName, shareTargetQuery(targetUrl)]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean))];
+  }
+
+  function shareTargetUrlKeys(targetUrl) {
+    try {
+      const url = new URL(String(targetUrl || ""));
+      const parts = url.pathname.split("/").filter(Boolean).map((part) => decodeURIComponent(part).toLowerCase());
+      const path = `/${parts.join("/")}`;
+      return [...new Set([path, ...parts.filter((part) => part !== "groups")].filter((value) => value && value !== "/"))];
+    } catch {
+      return [];
+    }
+  }
+
+  function elementMatchesTargetUrl(element, urlKeys) {
+    if (!urlKeys.length) return false;
+    const links = [];
+    if (element.matches?.("a[href]")) links.push(element);
+    links.push(...element.querySelectorAll?.("a[href]") || []);
+    return links.some((link) => {
+      try {
+        const href = new URL(link.href, location.origin);
+        const path = decodeURIComponent(href.pathname).replace(/\/$/, "").toLowerCase();
+        return urlKeys.some((key) => key.startsWith("/") ? path === key || path.startsWith(`${key}/`) : path.split("/").includes(key));
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  function scrollShareTargetList(surface) {
+    const scrollable = [...surface.querySelectorAll("div")]
+      .filter((element) => isVisible(element) && element.scrollHeight > element.clientHeight + 40)
+      .sort((left, right) => right.clientHeight - left.clientHeight)[0];
+    if (!scrollable) return;
+    const next = scrollable.scrollTop + Math.max(180, Math.floor(scrollable.clientHeight * 0.7));
+    scrollable.scrollTop = next >= scrollable.scrollHeight - scrollable.clientHeight ? 0 : next;
+  }
+
+  function findActiveShareSurface() {
+    const dialogs = [...document.querySelectorAll("div[role='dialog']")].filter(isVisible);
+    const searchDialog = [...dialogs].reverse().find((dialog) => {
+      const fields = [...dialog.querySelectorAll("input[type='search'], input[placeholder], div[role='textbox'][contenteditable='true']")]
+        .filter(isVisible);
+      return fields.some((field) => {
+        if (field instanceof HTMLInputElement && field.type === "search") return true;
+        const label = searchableTextFromParts(
+          field.getAttribute?.("aria-label") || "",
+          field.getAttribute?.("placeholder") || "",
+          field.getAttribute?.("title") || ""
+        );
+        return /search|tim kiem/.test(label);
+      });
+    });
+    if (searchDialog) return searchDialog;
+    return dialogs[dialogs.length - 1] || document;
+  }
+
+  function shareTargetSearchQuery(targetName, targetUrl) {
+    const name = String(targetName || "").trim();
+    if (name && !/^https?:\/\//i.test(name)) return name;
+    return shareTargetQuery(targetUrl).replace(/[-_.]+/g, " ").trim();
+  }
+
+  function elementInnerTextContainsSlug(element, urlKeys) {
+    if (!element || !urlKeys.length) return false;
+    const text = searchableText(element);
+    return urlKeys.some((key) => {
+      const raw = String(key || "").replace(/^\/+|\/+$/g, "");
+      if (!raw || raw.includes("/")) return false;
+      const variants = [raw, raw.replace(/[-_.]+/g, " ")]
+        .map(normalizeText)
+        .filter((value) => value.length >= 3);
+      return variants.some((needle) => text.includes(needle));
+    });
+  }
+
+  function setEditableText(element, text) {
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+      element.focus();
+      const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+      if (setter) setter.call(element, text);
+      else element.value = text;
+      element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+    activateTextbox(element);
+    document.execCommand("selectAll", false);
+    document.execCommand("delete", false);
+    document.execCommand("insertText", false, text);
+    notifyComposerChanged(element);
   }
 
   function isLoginPage() {
@@ -277,7 +904,7 @@
     const dialog = findPostDialog();
     const textbox = findComposerTextbox(dialog);
     const visibleText = normalizeText(getComposerText(textbox));
-    if (!visibleText) throw new Error("Composer is empty, refusing to click Post.");
+    if (!visibleText && !hasMediaPreview(dialog)) throw new Error("Composer is empty, refusing to click Post.");
     const button = findPostButton(dialog, kind);
     if (!button) throw new Error("Post button not found.");
     clickLikeUser(button);
@@ -356,7 +983,7 @@
   }
 
   function closestClickable(element) {
-    return element.closest("div[role='button'], button, label[role='button']") || element;
+    return element.closest("div[role='option'], div[role='radio'], div[role='menuitem'], div[role='button'], button, label[role='button'], a[role='link'], li[role='option'], [tabindex='0']") || element;
   }
 
   function clickLikeUser(element) {
@@ -385,9 +1012,9 @@
     if (!element) return "";
     return normalizeText([
       element.textContent || "",
-      element.getAttribute("aria-label") || "",
-      element.getAttribute("placeholder") || "",
-      element.getAttribute("title") || "",
+      element.getAttribute?.("aria-label") || "",
+      element.getAttribute?.("placeholder") || "",
+      element.getAttribute?.("title") || "",
     ].join(" "));
   }
 
@@ -405,7 +1032,7 @@
       .toLowerCase();
   }
 
-  function isBadRegion(element) {
+  function isBadRegion(element, options = {}) {
     for (let node = element; node && node !== document.body; node = node.parentElement) {
       const role = node.getAttribute?.("role") || "";
       const label = searchableTextFromParts(
@@ -414,7 +1041,14 @@
         node.getAttribute?.("data-pagelet") || ""
       );
       if (role === "complementary") return true;
-      if (/chat|messenger|contact|conversation|comment|reply|search|tim kiem|tin nhan|nhan tin/.test(label)) return true;
+      const badPattern = options.allowSearch
+        ? (options.allowPostActions
+          ? /chat|messenger|contact|conversation|tin nhan|nhan tin/
+          : /chat|messenger|contact|conversation|comment|reply|tin nhan|nhan tin/)
+        : (options.allowPostActions
+          ? /chat|messenger|contact|conversation|search|tim kiem|tin nhan|nhan tin/
+          : /chat|messenger|contact|conversation|comment|reply|search|tim kiem|tin nhan|nhan tin/);
+      if (badPattern.test(label)) return true;
     }
     return false;
   }

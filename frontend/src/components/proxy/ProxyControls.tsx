@@ -1,13 +1,10 @@
 "use client";
 
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { StatusBadge } from "@/components/shared/StatusBadge";
-import { EmptyState } from "@/components/shared/EmptyState";
-import type { ProxyKeyState, AppSettings } from "@/types";
+import type { AppSettings } from "@/types";
 
 type ProxyControlsProps = {
   config: AppSettings;

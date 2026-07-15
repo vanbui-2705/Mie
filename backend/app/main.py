@@ -13,22 +13,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from app.auth import get_or_create_default_user
+from app.auth import get_or_create_default_user, parse_token, _load_user_by_id
 from app.config import settings
-from app.db.postgres import close_db, create_all_tables, get_session, session_context
+from app.db.postgres import close_db, get_session, session_context
 from app.db.redis import close_redis
 from app.event_bus import event_bus
-from app.models.sqlmodels import FacebookAccount, Profile
-from app.routers import auth, browser_sessions, comment_tasks, extension_connector, facebook_accounts, graph, health, page_tasks, profiles, proxy, settings as settings_router, tasks
+from app.models.sqlmodels import FacebookAccount, Profile, UserStatus
+from app.routers import auth, auth_oauth, browser_sessions, comment_tasks, extension_connector, facebook_accounts, facebook_oauth, graph, health, page_tasks, profiles, proxy, roles, scheduled_posts, settings as settings_router, tasks
 from app.services.profile_manager import ProfileManager
 from app.services.proxy_manager import ProxyManager
+from app.services.scheduled_post_service import enqueue_due_posts
 from app.services.task_runner import TaskRunner
 from sqlalchemy import func, select
 
@@ -38,8 +40,6 @@ from sqlalchemy import func, select
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
-    await create_all_tables()
-
     pm = ProxyManager()
     profile_mgr = ProfileManager()
 
@@ -60,8 +60,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # wire singletons into router modules
     tasks._task_runner = runner
     proxy._proxy_manager = pm
+    scheduler_task = asyncio.create_task(_scheduler_tick())
+    app.state.scheduler_task = scheduler_task
 
-    yield
+    try:
+        yield
+    finally:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except asyncio.CancelledError:
+            pass
 
     # Shutdown — ordered
     await pm.stop_async()
@@ -95,6 +104,20 @@ async def _migrate_legacy_profiles(session) -> None:
         await session.commit()
 
 
+async def _scheduler_tick() -> None:
+    log = logging.getLogger("flowmeta.scheduler")
+    while True:
+        try:
+            fired = await enqueue_due_posts()
+            if fired:
+                log.info("scheduled posts fired: %s", fired)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("scheduler tick error")
+        await asyncio.sleep(60)
+
+
 # ─── App factory ───────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -115,12 +138,16 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(auth_oauth.router)
+app.include_router(roles.router)
 app.include_router(browser_sessions.router)
 app.include_router(profiles.router)
 app.include_router(facebook_accounts.router)
+app.include_router(facebook_oauth.router)
 app.include_router(comment_tasks.router)
 app.include_router(tasks.router)
 app.include_router(page_tasks.router)
+app.include_router(scheduled_posts.router)
 app.include_router(extension_connector.router)
 app.include_router(proxy.router)
 app.include_router(graph.router)
@@ -134,11 +161,27 @@ async def stream_events(
     request: Request,
     channels: str = "log",
     last_id: str | None = None,
+    token: str | None = None,
 ):
     """
     Multiplexed SSE endpoint.
-    GET /api/events/stream?channels=log,stats,proxy,profile&last_id=evt-000042
+    GET /api/events/stream?channels=log,stats,proxy,profile&token=<jwt>&last_id=evt-000042
     """
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication token is required")
+    try:
+        user_id = parse_token(token)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        async with session_context() as session:
+            user = await _load_user_by_id(session, user_id)
+            if user is None or user.status != UserStatus.ACTIVE:
+                raise HTTPException(status_code=401, detail="User not found or disabled")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
     wanted = [c.strip() for c in channels.split(",") if c.strip()]
 
     async def event_stream():
@@ -147,7 +190,7 @@ async def stream_events(
         consumers: list[asyncio.Task] = []
 
         async def _forward(channel: str) -> None:
-            gen = event_bus.subscribe(channel, last_id)
+            gen = event_bus.subscribe(channel, last_id, user_id=user_id)
             try:
                 async for event_id, event_type, data in gen:
                     if event_type == "ping":

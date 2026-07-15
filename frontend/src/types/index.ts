@@ -131,20 +131,34 @@ export function maskToken(token: string): string {
 
 export function statusToVariant(status: string): 'success' | 'warning' | 'danger' | 'info' | 'default' {
   const s = status.toLowerCase();
-  if (s === 'live' || s === 'thành công' || s === 'ready') return 'success';
-  if (s === 'checkpoint' || s === 'token out' || s === 'thất bại' || s === 'error') return 'danger';
-  if (s === 'đang chờ proxy' || s === 'waiting') return 'warning';
-  if (s === 'đang chạy' || s === 'Đang chạy') return 'info';
+  if (s === 'live' || s === 'thành công' || s === 'thanh cong' || s === 'ready') return 'success';
+  if (s === 'checkpoint' || s === 'token out' || s === 'thất bại' || s === 'that bai' || s === 'error') return 'danger';
+  if (s === 'đang chờ proxy' || s === 'dang cho proxy' || s === 'waiting') return 'warning';
+  if (s === 'đang chạy' || s === 'dang chay') return 'info';
   return 'default';
 }
 
 export function logLevelFromStatus(status: string): LogLevel {
   const s = status.toLowerCase();
-  if (s.includes('thành công') || s === 'live' || s === 'ready') return 'success';
-  if (s.includes('thất bại') || s.includes('checkpoint') || s.includes('token out') || s === 'error') return 'error';
-  if (s.includes('đang chờ') || s.includes('waiting')) return 'warning';
-  if (s.includes('đang chạy') || s.includes('đang chờ proxy')) return 'info';
+  if (s.includes('thành công') || s.includes('thanh cong') || s === 'live' || s === 'ready') return 'success';
+  if (s.includes('thất bại') || s.includes('that bai') || s.includes('checkpoint') || s.includes('token out') || s === 'error') return 'error';
+  if (s.includes('đang chờ') || s.includes('dang cho') || s.includes('waiting')) return 'warning';
+  if (s.includes('đang chạy') || s.includes('dang chay')) return 'info';
   return 'info';
+}
+
+export function taskStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    'cho chay': 'Chờ chạy',
+    'dang chay': 'Đang chạy',
+    'dang cho proxy': 'Đang chờ proxy',
+    'thanh cong': 'Thành công',
+    'that bai': 'Thất bại',
+    'dung': 'Dừng',
+    'dung profile': 'Dừng hồ sơ',
+    'cho duyet': 'Chờ duyệt',
+  };
+  return labels[status.trim().toLowerCase()] ?? status;
 }
 
 // Backward-compat alias (used by existing proxy page/Grid)

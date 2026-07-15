@@ -9,6 +9,22 @@ on:
 jobs:
   backend-build:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flowmeta
+          POSTGRES_PASSWORD: flowmeta_ci
+          POSTGRES_DB: flowmeta
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U flowmeta -d flowmeta"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://flowmeta:flowmeta_ci@localhost:5432/flowmeta
     defaults:
       run:
         working-directory: backend
@@ -24,11 +40,17 @@ jobs:
       - name: Install dependencies
         run: pip install --no-cache-dir -r requirements.txt
 
-      - name: Type check
-        run: pip install mypy && mypy app --ignore-missing-imports || true
-
       - name: Verify FastAPI app imports
         run: python -c "from app.main import app; print('Backend import OK')"
+
+      - name: Verify Alembic revision graph
+        run: python -m alembic heads
+
+      - name: Upgrade PostgreSQL schema
+        run: python -m alembic upgrade head
+
+      - name: Run backend tests
+        run: python -m pytest -q
 
   frontend-build:
     runs-on: ubuntu-latest
@@ -52,3 +74,11 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Docker Compose config
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet

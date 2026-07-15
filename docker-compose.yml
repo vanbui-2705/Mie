@@ -26,6 +26,17 @@ services:
       retries: 5
     restart: unless-stopped
 
+  migrate:
+    build:
+      context: ./backend
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmeta}:${POSTGRES_PASSWORD:-flowmeta}@postgres:5432/${POSTGRES_DB:-flowmeta}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   backend:
     build:
       context: ./backend
@@ -38,6 +49,19 @@ services:
       META_APP_ID: ${META_APP_ID:-}
       META_APP_SECRET: ${META_APP_SECRET:-}
       AUTO_EXCHANGE_LONG_LIVED_TOKEN: ${AUTO_EXCHANGE_LONG_LIVED_TOKEN:-true}
+      TOKEN_REFRESH_THRESHOLD_DAYS: ${TOKEN_REFRESH_THRESHOLD_DAYS:-14}
+      FACEBOOK_OAUTH_REDIRECT_URI: ${FACEBOOK_OAUTH_REDIRECT_URI:-http://localhost:${BACKEND_PORT:-8000}/api/facebook/oauth/callback}
+      FACEBOOK_OAUTH_SCOPES: ${FACEBOOK_OAUTH_SCOPES:-pages_show_list,pages_read_engagement,pages_manage_posts}
+      FACEBOOK_OAUTH_SUCCESS_URL: ${FACEBOOK_OAUTH_SUCCESS_URL:-http://localhost:${FRONTEND_PORT:-3000}/accounts}
+      AUTH_GOOGLE_CLIENT_ID: ${AUTH_GOOGLE_CLIENT_ID:-}
+      AUTH_GOOGLE_CLIENT_SECRET: ${AUTH_GOOGLE_CLIENT_SECRET:-}
+      AUTH_GOOGLE_REDIRECT_URI: ${AUTH_GOOGLE_REDIRECT_URI:-http://localhost:${BACKEND_PORT:-8000}/api/auth/oauth/google/callback}
+      AUTH_FACEBOOK_APP_ID: ${AUTH_FACEBOOK_APP_ID:-}
+      AUTH_FACEBOOK_APP_SECRET: ${AUTH_FACEBOOK_APP_SECRET:-}
+      AUTH_FACEBOOK_REDIRECT_URI: ${AUTH_FACEBOOK_REDIRECT_URI:-http://localhost:${BACKEND_PORT:-8000}/api/auth/oauth/facebook/callback}
+      AUTH_FRONTEND_CALLBACK_URL: ${AUTH_FRONTEND_CALLBACK_URL:-http://localhost:${FRONTEND_PORT:-3000}/auth/callback}
+      PASSWORD_RESET_URL: ${PASSWORD_RESET_URL:-http://localhost:${FRONTEND_PORT:-3000}/reset-password}
+      EXPOSE_PASSWORD_RESET_TOKEN: ${EXPOSE_PASSWORD_RESET_TOKEN:-false}
       BROWSER_PROFILE_DIR: ${BROWSER_PROFILE_DIR:-/app/browser-profiles}
       UPLOAD_DIR: ${UPLOAD_DIR:-/app/uploads}
       BROWSER_PROVIDER: ${BROWSER_PROVIDER:-kasm}
@@ -56,6 +80,8 @@ services:
       REMOTE_BROWSER_BASE_URL: ${REMOTE_BROWSER_BASE_URL:-http://localhost:${REMOTE_BROWSER_PORT:-3010}}
       REMOTE_BROWSER_URL_TEMPLATE: ${REMOTE_BROWSER_URL_TEMPLATE:-}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -84,6 +110,8 @@ services:
       FERNET_KEY: ${FERNET_KEY:-3ZcWeflwVSVVjCXKbRquP8EDZzaGyHNKsT2fSaGYNK8=}
       FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:-change-me-to-long-random-secret}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -109,6 +137,8 @@ services:
       REMOTE_BROWSER_BASE_URL: ${REMOTE_BROWSER_BASE_URL:-http://localhost:${REMOTE_BROWSER_PORT:-3010}}
       REMOTE_BROWSER_URL_TEMPLATE: ${REMOTE_BROWSER_URL_TEMPLATE:-}
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:

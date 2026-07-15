@@ -1,9 +1,14 @@
 from __future__ import annotations
 
-import pytest
-from httpx import AsyncClient
+import uuid
 
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from app.auth import current_user
+from app.db.postgres import get_session
 from app.main import app
+from app.models.sqlmodels import User, UserStatus
 from app.routers import tasks
 from app.routers.page_tasks import _parse_post_targets
 
@@ -64,11 +69,20 @@ class FakeRunner:
 
 
 @pytest.mark.asyncio
-async def test_tasks_start_accepts_json_body_contract() -> None:
+async def test_tasks_start_accepts_json_body_contract(session) -> None:
     original_runner = tasks._task_runner
     tasks._task_runner = FakeRunner()
+    app.dependency_overrides[current_user] = lambda: User(
+        id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+        username="contract-test-user",
+        role="user",
+        status=UserStatus.ACTIVE,
+    )
+    async def override_get_session():
+        yield session
+    app.dependency_overrides[get_session] = override_get_session
     try:
-        async with AsyncClient(app=app, base_url="http://testserver") as client:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
             response = await client.post(
                 "/api/tasks/start",
                 json={
@@ -88,6 +102,8 @@ async def test_tasks_start_accepts_json_body_contract() -> None:
             "status": "started",
         }
     finally:
+        app.dependency_overrides.pop(current_user, None)
+        app.dependency_overrides.pop(get_session, None)
         tasks._task_runner = original_runner
 
 

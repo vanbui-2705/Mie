@@ -48,6 +48,12 @@
         border-radius: 8px;
         padding: 12px;
       }
+      .panel + .panel {
+        margin-top: 10px;
+      }
+      .hidden {
+        display: none;
+      }
       label {
         display: block;
         margin: 10px 0 5px;
@@ -80,6 +86,9 @@
         grid-template-columns: 1fr auto auto;
         gap: 8px;
         margin-top: 12px;
+      }
+      .row.two {
+        grid-template-columns: 1fr auto;
       }
       .primary {
         background: var(--primary);
@@ -140,7 +149,27 @@
       <div id="version" class="version"></div>
     </header>
 
-    <section class="panel">
+    <section id="authPanel" class="panel">
+      <strong>Đăng nhập FlowMeta</strong>
+
+      <label for="identifier">Email hoặc tên đăng nhập</label>
+      <input id="identifier" autocomplete="username" />
+
+      <label for="password">Mật khẩu</label>
+      <input id="password" type="password" autocomplete="current-password" />
+
+      <div class="row two">
+        <button id="login" class="primary">Đăng nhập</button>
+        <button id="retry" class="ghost">Thử lại</button>
+      </div>
+    </section>
+
+    <section id="connectorPanel" class="panel hidden">
+      <div class="row two" style="margin-top: 0">
+        <strong id="signedInUser">Đã đăng nhập</strong>
+        <button id="logout" class="ghost">Đăng xuất</button>
+      </div>
+
       <label for="apiBase">Backend URL</label>
       <input id="apiBase" value="http://localhost:8000" />
 
@@ -155,11 +184,12 @@
         <button id="reload" class="ghost">Reload</button>
       </div>
 
-      <div class="status">
-        <div id="pill" class="pill">Idle</div>
-        <div id="status"></div>
-        <div id="debug"></div>
-      </div>
+    </section>
+
+    <section class="panel status">
+      <div id="pill" class="pill">Idle</div>
+      <div id="status"></div>
+      <div id="debug"></div>
     </section>
     <script src="popup.js"></script>
   </body>

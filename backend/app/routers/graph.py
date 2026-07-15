@@ -5,9 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import current_user
+from app.rbac import require_permission
 from app.crypto import decrypt
 from app.db.postgres import get_session
-from app.models.sqlmodels import Profile
+from app.models.sqlmodels import Profile, User
 from app.services.facebook_graph import (
     execute_comment_action,
     resolve_author_uid,
@@ -20,6 +22,7 @@ router = APIRouter(prefix="/api/graph", tags=["graph"])
 async def resolve_author(
     comment_link: str,
     token: str,
+    user: User = Depends(require_permission("facebook_account:read")),
 ):
     """Resolve author UID from a Facebook comment link via Graph API."""
     try:
@@ -32,7 +35,7 @@ async def resolve_author(
 
 
 @router.post("/edit", response_model=dict)
-async def graph_edit(request: dict):
+async def graph_edit(request: dict, user: User = Depends(require_permission("task:create"))):
     try:
         result = await execute_comment_action(
             action="edit",
@@ -50,7 +53,10 @@ async def graph_edit(request: dict):
 
 
 @router.delete("/delete", response_model=dict)
-async def graph_delete(request: dict):
+async def graph_delete(
+    request: dict,
+    user: User = Depends(require_permission("task:create")),
+):
     try:
         result = await execute_comment_action(
             action="delete",
@@ -66,7 +72,10 @@ async def graph_delete(request: dict):
 
 
 @router.post("/create", response_model=dict)
-async def graph_create(request: dict):
+async def graph_create(
+    request: dict,
+    user: User = Depends(require_permission("task:create")),
+):
     try:
         result = await execute_comment_action(
             action="new_comment",

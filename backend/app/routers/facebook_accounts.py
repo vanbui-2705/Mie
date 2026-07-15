@@ -1,7 +1,7 @@
 """Multi-user Facebook account and Fanpage routes."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_user
+from app.rbac import require_permission
 from app.config import settings
 from app.crypto import decrypt, encrypt, mask
 from app.db.postgres import get_session
@@ -31,6 +32,10 @@ def _account_response(account: FacebookAccount) -> dict:
         "token_status": account.token_status.value,
         "last_error": account.last_error or "",
         "last_checked_at": account.last_checked_at,
+        "token_expires_at": account.token_expires_at,
+        "token_last_refreshed_at": account.token_last_refreshed_at,
+        "token_is_long_lived": bool(account.token_is_long_lived),
+        "token_refresh_due": _token_refresh_due(account),
         "browser_status": account.browser_status,
         "browser_last_checked_at": account.browser_last_checked_at,
         "browser_last_error": account.browser_last_error or "",
@@ -53,7 +58,7 @@ def _page_response(page: FacebookPage) -> dict:
 
 @router.get("/api/facebook-accounts", response_model=list[dict])
 async def list_accounts(
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_account:read")),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
@@ -77,7 +82,7 @@ async def list_accounts(
 @router.post("/api/facebook-accounts/import", response_model=dict)
 async def import_accounts(
     body: dict = Body(default_factory=dict),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_account:create")),
     session: AsyncSession = Depends(get_session),
 ):
     raw_text = str(body.get("raw_text") or body.get("text") or "")
@@ -86,25 +91,47 @@ async def import_accounts(
     duplicate = 0
     exchanged = 0
     exchange_failed = 0
+    names_resolved = 0
+    resolve_names = bool(body.get("resolve_names", True))
     for raw_line in raw_text.replace("\r\n", "\n").split("\n"):
         line = raw_line.strip()
         if not line:
             continue
-        parts = line.split("|", 1)
-        if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+        parts = line.split("|", 2)
+        if len(parts) < 2 or not parts[0].strip() or not parts[1].strip():
             errors.append(f"Sai định dạng: {line}")
             continue
         uid = parts[0].strip()
         token = parts[1].strip()
+        account_name = parts[2].strip() if len(parts) > 2 else ""
         import_error = ""
+        token_expires_at = None
+        token_last_refreshed_at = None
+        token_is_long_lived = False
         if settings.AUTO_EXCHANGE_LONG_LIVED_TOKEN and settings.META_APP_ID and settings.META_APP_SECRET:
             exchange = await exchange_long_lived_user_token(token)
             if exchange.get("success") and exchange.get("access_token"):
                 token = str(exchange["access_token"])
+                token_expires_at = _expires_at_from_exchange(exchange)
+                token_last_refreshed_at = datetime.now(timezone.utc)
+                token_is_long_lived = True
                 exchanged += 1
             elif not exchange.get("skipped"):
                 exchange_failed += 1
                 import_error = str(exchange.get("message") or "Long-lived token exchange failed")
+        identity: dict = {}
+        if resolve_names:
+            try:
+                identity = await get_user_info(token)
+            except Exception as exc:
+                identity = {"success": False, "message": str(exc)}
+            if identity.get("success"):
+                uid = str(identity.get("id") or uid)
+                account_name = str(identity.get("name") or account_name)
+                names_resolved += int(bool(account_name))
+                import_error = ""
+            elif not import_error:
+                import_error = str(identity.get("message") or identity.get("error") or "Không lấy được tên tài khoản")
         result = await session.execute(
             select(FacebookAccount).where(
                 FacebookAccount.user_id == user.id,
@@ -114,16 +141,24 @@ async def import_accounts(
         existing = result.scalar_one_or_none()
         if existing:
             existing.user_token_enc = encrypt(token)
-            existing.token_status = TokenStatus.DA_REFRESH
+            existing.name = account_name or existing.name
+            existing.token_status = TokenStatus.LIVE if identity.get("success") else TokenStatus.DA_REFRESH
             existing.last_error = import_error
+            existing.token_expires_at = token_expires_at
+            existing.token_last_refreshed_at = token_last_refreshed_at
+            existing.token_is_long_lived = token_is_long_lived
             duplicate += 1
         else:
             session.add(FacebookAccount(
                 user_id=user.id,
                 uid=uid,
+                name=account_name or None,
                 user_token_enc=encrypt(token),
-                token_status=TokenStatus.DA_NAP,
+                token_status=TokenStatus.LIVE if identity.get("success") else TokenStatus.DA_NAP,
                 last_error=import_error,
+                token_expires_at=token_expires_at,
+                token_last_refreshed_at=token_last_refreshed_at,
+                token_is_long_lived=token_is_long_lived,
             ))
             added += 1
     await session.commit()
@@ -133,6 +168,7 @@ async def import_accounts(
         "duplicate": duplicate,
         "exchanged_long_lived": exchanged,
         "exchange_failed": exchange_failed,
+        "names_resolved": names_resolved,
         "errors": errors,
     }
 
@@ -140,10 +176,11 @@ async def import_accounts(
 @router.post("/api/facebook-accounts/{account_id}/check", response_model=dict)
 async def check_account(
     account_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_account:check")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_account(session, user.id, account_id)
+    await _refresh_account_token_if_due(session, account)
     result = await get_user_info(decrypt(account.user_token_enc))
     account.last_checked_at = datetime.now(timezone.utc)
     if result.get("success"):
@@ -160,10 +197,11 @@ async def check_account(
 @router.post("/api/facebook-accounts/{account_id}/sync-pages", response_model=dict)
 async def sync_pages(
     account_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_account:sync")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_account(session, user.id, account_id)
+    await _refresh_account_token_if_due(session, account)
     result = await get_my_pages(decrypt(account.user_token_enc))
     if not result.get("success"):
         account.last_error = result.get("message") or result.get("error") or "Sync pages failed"
@@ -214,7 +252,7 @@ async def sync_pages(
 @router.post("/api/facebook-accounts/{account_id}/browser-login/start", response_model=dict)
 async def start_browser_login(
     account_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_account(session, user.id, account_id)
@@ -224,7 +262,7 @@ async def start_browser_login(
 @router.post("/api/facebook-accounts/{account_id}/connect-browser/start", response_model=dict)
 async def start_connect_browser(
     account_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_account(session, user.id, account_id)
@@ -234,7 +272,7 @@ async def start_connect_browser(
 @router.get("/api/facebook-accounts/{account_id}/browser-login/status", response_model=dict)
 async def browser_login_status(
     account_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:read")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_account(session, user.id, account_id)
@@ -244,7 +282,7 @@ async def browser_login_status(
 @router.get("/api/facebook-accounts/{account_id}/connect-browser/status", response_model=dict)
 async def connect_browser_status(
     account_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:read")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_account(session, user.id, account_id)
@@ -254,7 +292,7 @@ async def connect_browser_status(
 @router.post("/api/facebook-accounts/{account_id}/browser-login/stop", response_model=dict)
 async def stop_browser_login(
     account_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_account(session, user.id, account_id)
@@ -264,7 +302,7 @@ async def stop_browser_login(
 @router.post("/api/facebook-accounts/{account_id}/connect-browser/stop", response_model=dict)
 async def stop_connect_browser(
     account_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_account(session, user.id, account_id)
@@ -273,7 +311,7 @@ async def stop_connect_browser(
 
 @router.get("/api/facebook-pages", response_model=list[dict])
 async def list_pages(
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_page:read")),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
@@ -282,6 +320,49 @@ async def list_pages(
         .order_by(FacebookPage.page_name)
     )
     return [_page_response(row) for row in result.scalars().all()]
+
+
+def _expires_at_from_exchange(exchange: dict) -> datetime | None:
+    try:
+        expires_in = int(exchange.get("expires_in") or 0)
+    except (TypeError, ValueError):
+        expires_in = 0
+    if expires_in <= 0:
+        return None
+    return datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+
+
+def _token_refresh_due(account: FacebookAccount) -> bool:
+    if not account.token_expires_at:
+        return False
+    expires_at = account.token_expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    threshold = max(1, int(settings.TOKEN_REFRESH_THRESHOLD_DAYS or 14))
+    return expires_at <= datetime.now(timezone.utc) + timedelta(days=threshold)
+
+
+async def _refresh_account_token_if_due(session: AsyncSession, account: FacebookAccount) -> bool:
+    if not settings.AUTO_EXCHANGE_LONG_LIVED_TOKEN:
+        return False
+    if not settings.META_APP_ID or not settings.META_APP_SECRET:
+        return False
+    if not _token_refresh_due(account):
+        return False
+    exchange = await exchange_long_lived_user_token(decrypt(account.user_token_enc))
+    account.token_last_refreshed_at = datetime.now(timezone.utc)
+    if exchange.get("success") and exchange.get("access_token"):
+        account.user_token_enc = encrypt(str(exchange["access_token"]))
+        account.token_expires_at = _expires_at_from_exchange(exchange)
+        account.token_is_long_lived = True
+        account.token_status = TokenStatus.DA_REFRESH
+        account.last_error = ""
+        await session.commit()
+        return True
+    if not exchange.get("skipped"):
+        account.last_error = str(exchange.get("message") or "Auto refresh long-lived token failed")
+        await session.commit()
+    return False
 
 
 async def _get_account(session: AsyncSession, user_id: uuid.UUID, account_id: str) -> FacebookAccount:
@@ -306,25 +387,25 @@ async def _start_connect_browser(session: AsyncSession, user_id: uuid.UUID, acco
         "remote_username": "kasm_user" if browser_session.provider == "kasm" else "",
         "remote_password": settings.KASM_VNC_PASSWORD if browser_session.provider == "kasm" else "",
         "profile_path": str(selected_profile_path),
-        "message": "Mo browser ket noi lan dau, login Facebook, roi bam Check browser. Task sau do se chay an bang Playwright/Browserless.",
+        "message": "Mở trình duyệt kết nối lần đầu, đăng nhập Facebook rồi bấm Kiểm tra trình duyệt. Các tác vụ sau đó sẽ chạy ẩn bằng Playwright/Browserless.",
     }
 
 
 async def _check_connect_browser(session: AsyncSession, user_id: uuid.UUID, account: FacebookAccount) -> dict:
     profile_dir = profile_path(user_id, account.id)
-    check = check_facebook_login(str(profile_dir)) if profile_exists(user_id, account.id) else {"success": False, "status": "login_required", "message": "Browser profile khong ton tai hoac rong."}
+    check = check_facebook_login(str(profile_dir)) if profile_exists(user_id, account.id) else {"success": False, "status": "login_required", "message": "Hồ sơ trình duyệt không tồn tại hoặc đang trống."}
     if check.get("success"):
         account.browser_status = "logged_in"
         account.browser_last_error = ""
     elif str(check.get("status") or "").lower() == "checkpoint":
         account.browser_status = "checkpoint"
-        account.browser_last_error = check.get("message") or "Facebook yeu cau checkpoint/xac thuc."
+        account.browser_last_error = check.get("message") or "Facebook yêu cầu kiểm tra hoặc xác thực."
     elif check.get("unknown") and profile_exists(user_id, account.id):
         account.browser_status = "login_required"
-        account.browser_last_error = check.get("message") or "Chua the check login trong API container."
+        account.browser_last_error = check.get("message") or "Chưa thể kiểm tra đăng nhập trong API container."
     elif account.browser_status == "logged_in":
         account.browser_status = "expired"
-        account.browser_last_error = check.get("message") or "Browser profile khong con login."
+        account.browser_last_error = check.get("message") or "Hồ sơ trình duyệt không còn đăng nhập."
     else:
         account.browser_status = "login_required"
         account.browser_last_error = check.get("message") or account.browser_last_error

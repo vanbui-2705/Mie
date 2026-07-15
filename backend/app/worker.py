@@ -6,7 +6,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from app.db.postgres import close_db, create_all_tables, get_session
+from app.db.postgres import close_db, get_session
 from app.db.postgres import session_context
 from app.db.redis import close_redis
 from app.event_bus import event_bus
@@ -22,7 +22,6 @@ logger = logging.getLogger("flowmeta.worker")
 
 async def run_worker() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    await create_all_tables()
     proxy_manager = ProxyManager()
     runner = TaskRunner(
         get_session=get_session,

@@ -36,3 +36,18 @@ async def dequeue_extension_job(account_id: str, timeout_seconds: int = 20) -> d
         return None
     _, raw_payload = item
     return json.loads(raw_payload)
+
+
+async def remove_queued_extension_job(account_id: str, job_id: str) -> bool:
+    """Atomically claim a still-queued job for fallback without duplicating a popped job."""
+    redis = await get_redis()
+    key = f"{QUEUE_PREFIX}{account_id}"
+    for raw_payload in await redis.lrange(key, 0, -1):
+        try:
+            payload = json.loads(raw_payload)
+        except (TypeError, ValueError):
+            continue
+        if str(payload.get("job_id") or "") != str(job_id):
+            continue
+        return bool(await redis.lrem(key, 1, raw_payload))
+    return False

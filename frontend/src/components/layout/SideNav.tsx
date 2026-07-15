@@ -3,25 +3,25 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Globe2, Menu, MessageSquare, Send, Settings, Share2, Users, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { CalendarClock, Globe2, Menu, MessageSquare, Send, Settings, Share2, UserCog, Users, X } from "lucide-react";
+import { useState } from "react";
+import { useAuth } from "@/lib/auth-context";
 
 const navItems = [
-  { name: "Accounts & Pages", href: "/accounts", icon: Users },
-  { name: "Auto Comment", href: "/auto-comment", icon: MessageSquare },
-  { name: "Auto Post", href: "/auto-post", icon: Send },
-  { name: "Auto Share", href: "/auto-share", icon: Share2 },
-  { name: "Proxy", href: "/proxy", icon: Globe2 },
-  { name: "Cài đặt", href: "/settings", icon: Settings },
+  { name: "Accounts & Pages", href: "/accounts", icon: Users, permission: "facebook_account:read" },
+  { name: "Auto Comment", href: "/auto-comment", icon: MessageSquare, permission: "task:create" },
+  { name: "Auto Post", href: "/auto-post", icon: Send, permission: "facebook_page:post" },
+  { name: "Lịch đăng", href: "/scheduled-posts", icon: CalendarClock, permission: "scheduled_post:read" },
+  { name: "Auto Share", href: "/auto-share", icon: Share2, permission: "facebook_group:share" },
+  { name: "Proxy", href: "/proxy", icon: Globe2, permission: "proxy:read" },
+  { name: "Users", href: "/users", icon: UserCog, permission: "user:read" },
+  { name: "Cài đặt", href: "/settings", icon: Settings, permission: "settings:read" },
 ];
 
 export function SideNav() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
+  const { can, user } = useAuth();
 
   return (
     <aside
@@ -36,7 +36,7 @@ export function SideNav() {
         style={{ borderBottom: "1px solid rgba(255,255,255,0.08)" }}
       >
         <div className="flex flex-col">
-          <span className="text-white font-bold text-base tracking-tight">FlowMeta</span>
+          <span className="text-base font-bold tracking-tight text-white">FlowMeta</span>
           <span className="text-[10px] font-medium" style={{ color: "var(--accent)" }}>
             Automation Console
           </span>
@@ -56,19 +56,20 @@ export function SideNav() {
       <nav
         className={cn(
           "grid gap-1 overflow-hidden px-2 transition-[max-height,padding] duration-150 md:block md:max-h-none md:flex-1 md:overflow-visible md:px-3 md:py-4 md:[&>*+*]:mt-1",
-          mobileOpen ? "max-h-80 py-2" : "max-h-0 py-0 md:py-4",
+          mobileOpen ? "max-h-[420px] py-2" : "max-h-0 py-0 md:py-4",
         )}
       >
-        {navItems.map((item) => {
+        {navItems.filter((item) => can(item.permission)).map((item) => {
           const isActive = pathname === item.href;
           const Icon = item.icon;
           return (
             <Link
               key={item.href}
               href={item.href}
+              onClick={() => setMobileOpen(false)}
               className={cn(
                 "flex min-h-10 items-center gap-3 px-3 py-2 text-[13px] font-medium transition-all duration-100 md:min-h-0 md:py-2.5",
-                isActive ? "text-white" : "text-white/60 hover:bg-white/8 hover:text-white"
+                isActive ? "text-white" : "text-white/60 hover:bg-white/8 hover:text-white",
               )}
               style={
                 isActive
@@ -83,7 +84,7 @@ export function SideNav() {
                     }
               }
             >
-              <Icon className="w-4 h-4" style={{ color: isActive ? "#fff" : "rgba(255,255,255,0.55)" }} />
+              <Icon className="h-4 w-4" style={{ color: isActive ? "#fff" : "rgba(255,255,255,0.55)" }} />
               {item.name}
             </Link>
           );
@@ -93,15 +94,15 @@ export function SideNav() {
       <div className="hidden p-4 md:block" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
         <div className="flex items-center gap-3">
           <div
-            className="w-8 h-8 rounded-md flex items-center justify-center text-white font-semibold text-xs"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-xs font-semibold text-white"
             style={{ background: "var(--accent)" }}
           >
-            OP
+            {(user?.username || "U").slice(0, 2).toUpperCase()}
           </div>
           <div className="flex flex-col">
-            <span className="text-white text-[12px] font-medium">Operator</span>
+            <span className="text-[12px] font-medium text-white">{user?.username || "User"}</span>
             <span className="text-[10px]" style={{ color: "rgba(255,255,255,0.45)" }}>
-              Multi-user ready
+              {user?.roles?.join(", ") || user?.role || "user"}
             </span>
           </div>
         </div>

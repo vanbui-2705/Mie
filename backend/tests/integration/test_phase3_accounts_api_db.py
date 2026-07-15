@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 if not TEST_DATABASE_URL:
@@ -11,7 +13,14 @@ if not TEST_DATABASE_URL:
 
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
-from app.db.postgres import close_db, create_all_tables  # noqa: E402
+subprocess.run(
+    [sys.executable, "-m", "alembic", "upgrade", "head"],
+    check=True,
+    cwd=os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+)
+
+from app.auth import create_token, get_or_create_default_user  # noqa: E402
+from app.db.postgres import close_db, session_context  # noqa: E402
 from app.main import app  # noqa: E402
 
 pytestmark = pytest.mark.integration
@@ -19,9 +28,12 @@ pytestmark = pytest.mark.integration
 
 @pytest.mark.asyncio
 async def test_import_facebook_account_api_with_real_db() -> None:
-    await create_all_tables()
     uid = "pytest_phase3_10001"
-    async with AsyncClient(app=app, base_url="http://testserver") as client:
+    async with session_context() as session:
+        user = await get_or_create_default_user(session)
+        token = create_token(user.id)
+    headers = {"Authorization": f"Bearer {token}"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver", headers=headers) as client:
         import_response = await client.post(
             "/api/facebook-accounts/import",
             json={"raw_text": f"{uid}|EAATEST_TOKEN"},

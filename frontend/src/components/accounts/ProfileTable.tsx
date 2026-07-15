@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { EmptyState } from "@/components/shared/EmptyState";

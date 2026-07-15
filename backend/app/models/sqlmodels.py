@@ -152,9 +152,13 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True,
+        default=uuid.uuid4,
         server_default=func.gen_random_uuid(),
     )
     username: Mapped[str] = mapped_column(CITEXT, nullable=False, unique=True)
+    email: Mapped[Optional[str]] = mapped_column(CITEXT, nullable=True, unique=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    avatar_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
     status: Mapped[UserStatus] = mapped_column(
@@ -165,6 +169,98 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
+
+
+class Role(Base):
+    __tablename__ = "roles"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+
+class Permission(Base):
+    __tablename__ = "permissions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    code: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    resource: Mapped[str] = mapped_column(String(64), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True,
+    )
+    permission_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("permissions.id", ondelete="CASCADE"), primary_key=True,
+    )
+
+
+class UserRole(Base):
+    __tablename__ = "user_roles"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+    )
+    role_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True,
+    )
+    assigned_by_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    assigned_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+    __table_args__ = (Index("idx_user_roles_role", role_id),)
+
+
+class OAuthAccount(Base):
+    __tablename__ = "oauth_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[Optional[str]] = mapped_column(CITEXT, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("provider", "provider_user_id", name="uq_oauth_provider_identity"),
+        Index("idx_oauth_accounts_user", user_id),
+    )
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
+    user_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (Index("idx_password_reset_user", user_id),)
 
 
 class FacebookAccount(Base):
@@ -189,6 +285,13 @@ class FacebookAccount(Base):
     last_checked_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None,
     )
+    token_expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    token_last_refreshed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    token_is_long_lived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     browser_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_configured")
     browser_last_checked_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None,
@@ -392,11 +495,66 @@ class ShareCampaign(Base):
     )
 
 
+class ScheduledPost(Base):
+    __tablename__ = "scheduled_posts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False, comment="Human-readable label")
+    action: Mapped[CommentAction] = mapped_column(
+        Enum(CommentAction, name="comment_action", native_enum=False),
+        nullable=False,
+        default=CommentAction.POST_PAGE,
+    )
+    targets_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None, comment="JSON-encoded target IDs list"
+    )
+    message: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    link: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    media_paths_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None, comment="JSON array of saved media file paths"
+    )
+    post_items_json: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None, comment="JSON array of scheduled post content/media packages"
+    )
+    next_item_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_threads: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    start_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None, comment="First fire time"
+    )
+    interval_seconds: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True, default=None, comment="Seconds between fires; NULL means one-shot"
+    )
+    next_fire_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None, index=True,
+    )
+    last_fired_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    stop_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="paused")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (Index("idx_scheduled_posts_user_next_fire", user_id, next_fire_at),)
+
+
 class ShareTarget(Base):
     __tablename__ = "share_targets"
 
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True,
+        default=uuid.uuid4,
         server_default=func.gen_random_uuid(),
     )
     campaign_id: Mapped[uuid.UUID] = mapped_column(
@@ -430,10 +588,11 @@ class TaskRun(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True), primary_key=True,
+        default=uuid.uuid4,
         server_default=func.gen_random_uuid(),
     )
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, default=None,
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
     )
     status: Mapped[TaskRunStatus] = mapped_column(
         Enum(TaskRunStatus, name="task_run_status", native_enum=False),
@@ -495,8 +654,8 @@ class TaskItem(Base):
         ForeignKey("task_runs.id", ondelete="CASCADE"),
         nullable=False,
     )
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, default=None,
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
     )
     item_index: Mapped[int] = mapped_column(Integer, nullable=False)
     uid: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, default=None)
@@ -573,12 +732,15 @@ class ProxyKey(Base):
     __tablename__ = "proxy_keys"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
     api_key_enc: Mapped[str] = mapped_column(
         Text, nullable=False,
         comment="Fernet-encrypted KiotProxy API key",
     )
     masked_key: Mapped[str] = mapped_column(
-        String(32), nullable=False, unique=True,
+        String(32), nullable=False,
         comment="Display-safe abbreviation of api_key",
     )
     current_proxy: Mapped[Optional[str]] = mapped_column(
@@ -631,13 +793,21 @@ class ProxyKey(Base):
         server_default=func.now(), onupdate=func.now(),
     )
 
+    __table_args__ = (
+        UniqueConstraint("user_id", "masked_key", name="uq_proxy_keys_user_masked"),
+        Index("idx_proxy_keys_user", user_id),
+    )
+
 
 # ─── App Settings ─────────────────────────────────────────────────────────────
 
 class AppSetting(Base):
     __tablename__ = "app_settings"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True,
+    )
     kiot_auth_token_enc: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, default=None,
     )

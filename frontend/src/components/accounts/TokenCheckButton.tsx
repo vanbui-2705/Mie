@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { apiFetch } from "@/lib/api-client";
-import { RefreshCw, CheckCircle2, XCircle } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 
 type TokenCheckButtonProps = {
   profileIds: string[];
@@ -13,7 +13,6 @@ type TokenCheckButtonProps = {
 
 export function TokenCheckButton({ profileIds, disabled }: TokenCheckButtonProps) {
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<{ live?: number; die?: number } | null>(null);
 
   const handleCheck = useCallback(async () => {
     if (profileIds.length === 0) {
@@ -21,9 +20,8 @@ export function TokenCheckButton({ profileIds, disabled }: TokenCheckButtonProps
       return;
     }
     setLoading(true);
-    setResult(null);
     try {
-      const data = await apiFetch<Record<string, { token_status: string }>>(
+      await apiFetch<Record<string, { token_status: string }>>(
         "/api/profiles/check-tokens",
         {
           method: "POST",

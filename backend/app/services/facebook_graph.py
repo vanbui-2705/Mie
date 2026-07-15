@@ -1,9 +1,10 @@
 """Facebook Graph API client — direct port of CommentService.cs."""
 from __future__ import annotations
 
+import json
 import re
 from typing import Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import httpx
 
@@ -300,6 +301,43 @@ async def exchange_long_lived_user_token(token: str, proxy_url: Optional[str] = 
         return {"success": False, "message": str(ex), "skipped": False}
 
 
+async def exchange_oauth_code_for_user_token(code: str, redirect_uri: str, proxy_url: Optional[str] = None) -> dict:
+    """Exchange a Facebook OAuth callback code for a user access token."""
+    if not settings.META_APP_ID or not settings.META_APP_SECRET:
+        return {"success": False, "message": "META_APP_ID/META_APP_SECRET is not configured."}
+    try:
+        async with httpx.AsyncClient(
+            timeout=GRAPH_TIMEOUT,
+            proxy=_build_proxy_handler(proxy_url),
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get(
+                "https://graph.facebook.com/oauth/access_token",
+                params={
+                    "client_id": settings.META_APP_ID,
+                    "client_secret": settings.META_APP_SECRET,
+                    "redirect_uri": redirect_uri,
+                    "code": code,
+                },
+            )
+            if resp.status_code != 200:
+                return build_graph_error_result(resp.status_code, resp.text)
+            data = resp.json()
+            token = str(data.get("access_token") or "")
+            if not token:
+                return {"success": False, "message": "Meta did not return access_token."}
+            return {
+                "success": True,
+                "access_token": token,
+                "expires_in": data.get("expires_in"),
+                "token_type": data.get("token_type", ""),
+            }
+    except httpx.TimeoutException:
+        return {"success": False, "message": "Timeout exchanging OAuth code."}
+    except Exception as ex:
+        return {"success": False, "message": str(ex)}
+
+
 async def get_user_info(token: str, proxy_url: Optional[str] = None) -> dict:
     url = f"https://graph.facebook.com/me?fields=id,name&access_token={token}"
     async with httpx.AsyncClient(
@@ -381,13 +419,17 @@ async def post_page_media(
         return await post_page_feed(page_id, page_token, message, link, proxy_url)
 
     final_message = f"{message}\n\n{link}".strip() if link else message
+    photo_paths = [path for path in existing if not _is_video_path(path)]
+    video_paths = [path for path in existing if _is_video_path(path)]
     results = []
-    for path in existing:
-        ext = "." + path.rsplit(".", 1)[-1].lower() if "." in path else ""
-        if ext in VIDEO_EXTENSIONS:
-            results.append(await post_page_video(page_id, page_token, final_message, path, proxy_url))
+    if photo_paths:
+        if len(photo_paths) == 1 and not video_paths:
+            results.append(await post_page_photo(page_id, page_token, final_message, photo_paths[0], proxy_url))
         else:
-            results.append(await post_page_photo(page_id, page_token, final_message, path, proxy_url))
+            results.append(await post_page_multi_photo(page_id, page_token, final_message, photo_paths, proxy_url))
+
+    for path in video_paths:
+        results.append(await post_page_video(page_id, page_token, final_message, path, proxy_url))
 
     failed = [result for result in results if not result.get("success")]
     if failed:
@@ -398,12 +440,76 @@ async def post_page_media(
         }
 
     ids = [str(result.get("post_id") or "") for result in results if result.get("post_id")]
+    parts = []
+    if photo_paths:
+        parts.append(f"{len(photo_paths)} anh")
+    if video_paths:
+        parts.append(f"{len(video_paths)} video")
     return {
         "success": True,
-        "message": "Da dang media len Fanpage.",
+            "message": f"Đã đăng {' và '.join(parts)} lên Fanpage.",
         "post_id": ", ".join(ids),
         "post_url": f"https://www.facebook.com/{ids[0]}" if ids else "",
         "results": results,
+    }
+
+
+def _is_video_path(media_path: str) -> bool:
+    ext = "." + media_path.rsplit(".", 1)[-1].lower() if "." in media_path else ""
+    return ext in VIDEO_EXTENSIONS
+
+
+async def post_page_multi_photo(
+    page_id: str,
+    page_token: str,
+    message: str,
+    media_paths: list[str],
+    proxy_url: Optional[str] = None,
+) -> dict:
+    uploaded_ids: list[str] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=GRAPH_TIMEOUT,
+            proxy=_build_proxy_handler(proxy_url),
+            follow_redirects=True,
+        ) as client:
+            for media_path in media_paths:
+                with open(media_path, "rb") as file_obj:
+                    files = {"source": (media_path.rsplit("/", 1)[-1], file_obj, get_image_content_type(media_path))}
+                    data = {"published": "false", "access_token": page_token}
+                    resp = await client.post(f"{GRAPH_BASE}{page_id}/photos", data=data, files=files)
+                if resp.status_code != 200:
+                    result = build_graph_error_result(resp.status_code, resp.text)
+                    result["uploaded_photo_count"] = len(uploaded_ids)
+                    return result
+                photo_id = str(resp.json().get("id") or "")
+                if not photo_id:
+                    return {
+                        "success": False,
+            "message": "Meta tải ảnh lên thành công nhưng không trả về mã ảnh.",
+                        "uploaded_photo_count": len(uploaded_ids),
+                    }
+                uploaded_ids.append(photo_id)
+
+            data = {"message": message, "access_token": page_token}
+            for index, photo_id in enumerate(uploaded_ids):
+                data[f"attached_media[{index}]"] = json.dumps({"media_fbid": photo_id})
+            resp = await client.post(f"{GRAPH_BASE}{page_id}/feed", data=data)
+    except OSError as ex:
+        return {"success": False, "message": f"Không mở được tệp ảnh: {ex}"}
+
+    if resp.status_code != 200:
+        result = build_graph_error_result(resp.status_code, resp.text)
+        result["uploaded_photo_count"] = len(uploaded_ids)
+        return result
+
+    created_id = resp.json().get("id", "")
+    return {
+        "success": True,
+        "message": f"Đã đăng {len(uploaded_ids)} ảnh lên Fanpage trong một bài.",
+        "post_id": created_id,
+        "post_url": f"https://www.facebook.com/{created_id}" if created_id else "",
+        "photo_ids": uploaded_ids,
     }
 
 
@@ -425,14 +531,14 @@ async def post_page_photo(
             ) as client:
                 resp = await client.post(f"{GRAPH_BASE}{page_id}/photos", data=data, files=files)
     except OSError as ex:
-        return {"success": False, "message": f"Khong mo duoc file media: {ex}"}
+        return {"success": False, "message": f"Không mở được tệp phương tiện: {ex}"}
 
     if resp.status_code != 200:
         return build_graph_error_result(resp.status_code, resp.text)
     created_id = resp.json().get("post_id") or resp.json().get("id", "")
     return {
         "success": True,
-        "message": "Da dang anh len Fanpage.",
+            "message": "Đã đăng ảnh lên Fanpage.",
         "post_id": created_id,
         "post_url": f"https://www.facebook.com/{created_id}" if created_id else "",
     }
@@ -457,17 +563,76 @@ async def post_page_video(
             ) as client:
                 resp = await client.post(f"{video_base}{page_id}/videos", data=data, files=files)
     except OSError as ex:
-        return {"success": False, "message": f"Khong mo duoc file video: {ex}"}
+        return {"success": False, "message": f"Không mở được tệp video: {ex}"}
 
     if resp.status_code != 200:
         return build_graph_error_result(resp.status_code, resp.text)
     created_id = resp.json().get("id", "")
     return {
         "success": True,
-        "message": "Da dang video len Fanpage.",
+            "message": "Đã đăng video lên Fanpage.",
         "post_id": created_id,
         "post_url": f"https://www.facebook.com/{created_id}" if created_id else "",
     }
+
+
+async def resolve_facebook_group_id(
+    token: str, group_url: str, proxy_url: Optional[str] = None
+) -> dict:
+    """Resolve a Facebook group URL to its numeric Graph API ID via /search.
+
+    Extracts the slug (last path segment after /groups/) and calls
+    GET /search?q={slug}&type=group&fields=id,name.
+    Returns {"success": True, "group_id": "...", "group_name": "..."}
+    or {"success": False, "message": "..."} on failure.
+    """
+    parsed = urlparse(group_url)
+    hostname = (parsed.hostname or "").lower()
+    if hostname != "facebook.com" and not hostname.endswith(".facebook.com"):
+        return {"success": False, "message": "URL is not a Facebook group URL."}
+    parts = [part for part in parsed.path.split("/") if part]
+    if not parts or parts[0].lower() != "groups":
+        return {"success": False, "message": "URL does not contain a valid /groups/ path."}
+    slug = unquote(parts[1]).strip() if len(parts) > 1 else ""
+    if not slug:
+        return {"success": False, "message": "No group slug found in URL."}
+
+    url = (
+        f"{GRAPH_BASE}search"
+        f"?q={quote(slug)}&type=group&fields=id,name&access_token={token}"
+    )
+    try:
+        async with httpx.AsyncClient(
+            timeout=GRAPH_TIMEOUT,
+            proxy=_build_proxy_handler(proxy_url),
+            follow_redirects=True,
+        ) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return build_graph_error_result(resp.status_code, resp.text)
+            data = resp.json()
+            items = data.get("data", [])
+            if not items:
+                return {
+                    "success": False,
+                    "message": f"No group matched slug '{slug}'.",
+                }
+            for item in items:
+                group_id = str(item.get("id", "") or "")
+                if group_id.isdigit():
+                    return {
+                        "success": True,
+                        "group_id": group_id,
+                        "group_name": str(item.get("name", "") or ""),
+                    }
+            return {
+                "success": False,
+                "message": "Graph search returned no group with a numeric id.",
+            }
+    except RuntimeError:
+        raise
+    except Exception as ex:
+        return {"success": False, "message": str(ex)}
 
 
 async def resolve_author_uid(

@@ -6,7 +6,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from app.db.postgres import close_db, create_all_tables, session_context
+from app.db.postgres import close_db, session_context
 from app.db.redis import close_redis
 from app.event_bus import event_bus
 from sqlalchemy import select
@@ -21,7 +21,6 @@ logger = logging.getLogger("flowmeta.browser_worker")
 
 async def run_browser_worker() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    await create_all_tables()
     logger.info("FlowMeta browser worker started")
     try:
         while True:
@@ -67,7 +66,16 @@ async def process_browser_job(job: dict) -> bool:
         elif job_type == "group_post":
             result = await asyncio.to_thread(post_to_group, profile_dir, target_url, final_message, media_paths)
         else:
-            result = await asyncio.to_thread(share_to_target, profile_dir, target_url, source_url, message, job_type)
+            result = await asyncio.to_thread(
+                share_to_target,
+                profile_dir,
+                target_url,
+                source_url,
+                message,
+                job_type,
+                True,
+                str(job.get("target_name") or ""),
+            )
         await _write_result(run_id, log_index, uid or target_url, result, account_id, task_item_id, action, share_target_id)
         return bool(result.get("success"))
     except Exception as exc:
@@ -135,6 +143,7 @@ async def _write_result(run_id: str, log_index: int, uid: str, result: dict, acc
         await session.commit()
 
     await event_bus.publish("log", "log", {
+        "user_id": str(account.user_id) if account is not None else "",
         "run_id": run_id,
         "log_index": log_index,
         "uid": uid,

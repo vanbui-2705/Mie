@@ -84,7 +84,8 @@ class TaskRunner:
         link_text: str,
         post_text: str,
         new_text: str,
-        image_input: str,
+    image_input: str,
+    user_id = None,
     ) -> str:
         """Cancel previous run and start fresh. Returns run_id (UUID string)."""
         self.stop()
@@ -102,7 +103,7 @@ class TaskRunner:
         await self._pub_stats()
 
         self._current_task = asyncio.ensure_future(
-            self._run(run_id, action, max_threads, delay, tasks, variants, images, rnd, stop_event)
+            self._run(run_id, action, max_threads, delay, tasks, variants, images, rnd, stop_event, user_id=user_id)
         )
         self._current_task.add_done_callback(lambda _: self._clear_run(run_id))
         return run_id
@@ -186,13 +187,17 @@ class TaskRunner:
         rnd,
         stop,
         create_run: bool = True,
+    user_id = None,
     ):
-        active_user_id = None
+        active_user_id = user_id
         # Persist or activate TaskRun row.
         async with session_context() as session:
             if create_run:
+                if active_user_id is None:
+                    raise ValueError("user_id is required when creating a task run")
                 run = TaskRun(
                     id=uuid.UUID(run_id),
+                    user_id=active_user_id,
                     status=TaskRunStatus.RUNNING,
                     action=action,
                     max_threads=max_threads,
@@ -466,14 +471,19 @@ class TaskRunner:
                 "log_index": self._log_index,
                 **data,
             }
-            await self._persist_log(data)
+            owner_id = await self._persist_log(data)
+            if owner_id is not None:
+                data["user_id"] = owner_id
         await self._event_publish(channel, event_type, data)
 
-    async def _persist_log(self, data: dict) -> None:
+    async def _persist_log(self, data: dict) -> str | None:
         run_id = data.get("run_id")
         if not run_id:
-            return
+            return None
         async with session_context() as session:
+            run = await session.get(TaskRun, uuid.UUID(run_id))
+            if run is None:
+                return None
             session.add(TaskLog(
                 run_id=uuid.UUID(run_id),
                 log_index=data.get("log_index", 0),
@@ -487,6 +497,7 @@ class TaskRunner:
             ))
             await self._sync_task_item(session, data)
             await session.commit()
+            return str(run.user_id)
 
     async def _finish(self, run_id: str, empty: bool) -> None:
         async with session_context() as session:

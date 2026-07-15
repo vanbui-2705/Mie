@@ -1,7 +1,6 @@
 """Profile CRUD router — REST endpoints for profile management."""
 from __future__ import annotations
 
-import uuid
 from typing import List
 
 from fastapi import APIRouter, Body, Depends
@@ -9,10 +8,12 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import CITEXT
 
+from app.auth import current_user
+from app.rbac import require_permission
 from app.crypto import decrypt
 from app.db.postgres import get_session
 from app.event_bus import event_bus
-from app.models.sqlmodels import Profile, TokenStatus
+from app.models.sqlmodels import Profile, TokenStatus, User
 from app.schemas import (
     ProfileImportResult,
     ProfileResponse,
@@ -36,13 +37,17 @@ def _profile_to_response(profile: Profile) -> ProfileResponse:
 
 
 @router.get("", response_model=List[ProfileResponse])
-async def list_profiles(session: AsyncSession = Depends(get_session)):
+async def list_profiles(
+    user: User = Depends(require_permission("facebook_account:read")),
+    session: AsyncSession = Depends(get_session),
+):
     result = await session.execute(select(Profile).order_by(Profile.uid))
     return [_profile_to_response(p) for p in result.scalars().all()]
 
 
 @router.post("/import", response_model=ProfileImportResult)
 async def import_profiles(
+    user: User = Depends(require_permission("facebook_account:create")),
     body: dict | None = Body(default=None),
     raw_text: str = "",
     session: AsyncSession = Depends(get_session),
@@ -52,7 +57,6 @@ async def import_profiles(
     if not raw_text:
         return ProfileImportResult(total=0, added=0, duplicate=0, errors=[])
     manager = ProfileManager()
-    # First load existing into cache
     await manager.reload_cache(session)
     result = await manager.import_text(session, raw_text)
     return ProfileImportResult(
@@ -65,6 +69,7 @@ async def import_profiles(
 
 @router.delete("", response_model=dict)
 async def remove_profiles(
+    user: User = Depends(require_permission("facebook_account:delete")),
     body: dict | None = Body(default=None),
     uids: list[str] = [],
     session: AsyncSession = Depends(get_session),
@@ -82,7 +87,10 @@ async def remove_profiles(
 
 
 @router.get("/export", response_model=dict)
-async def export_profiles(session: AsyncSession = Depends(get_session)):
+async def export_profiles(
+    user: User = Depends(require_permission("facebook_account:read")),
+    session: AsyncSession = Depends(get_session),
+):
     result = await session.execute(select(Profile).order_by(Profile.uid))
     rows = result.scalars().all()
     tokens = [f"{p.uid}|{decrypt(p.token_enc)}" for p in rows]
@@ -90,7 +98,10 @@ async def export_profiles(session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/states", response_model=dict)
-async def export_states(session: AsyncSession = Depends(get_session)):
+async def export_states(
+    user: User = Depends(require_permission("facebook_account:read")),
+    session: AsyncSession = Depends(get_session),
+):
     result = await session.execute(select(Profile).order_by(Profile.uid))
     rows = result.scalars().all()
     states = {
@@ -106,6 +117,7 @@ async def export_states(session: AsyncSession = Depends(get_session)):
 
 @router.put("/states", response_model=dict)
 async def apply_states(
+    user: User = Depends(require_permission("facebook_account:update")),
     states: dict[str, dict] = {},
     session: AsyncSession = Depends(get_session),
 ):
@@ -119,6 +131,7 @@ async def apply_states(
 
 @router.post("/check-tokens", response_model=dict)
 async def check_tokens(
+    user: User = Depends(require_permission("facebook_account:check")),
     body: dict | None = Body(default=None),
     session: AsyncSession = Depends(get_session),
 ):
@@ -150,12 +163,13 @@ async def check_tokens(
             profile.token_status = TokenStatus.DIE
             profile.last_error = str(ex)
 
-        await session.commit()
-        await event_bus.publish("profile", "profile", {
-            "uid": profile.uid,
-            "token_status": profile.token_status.value,
-            "last_error": profile.last_error or "",
-            "task_count": profile.task_count,
-        })
+    await session.commit()
+    await event_bus.publish("profile", "profile", {
+        "user_id": str(user.id),
+        "uid": profile.uid,
+        "token_status": profile.token_status.value,
+        "last_error": profile.last_error or "",
+        "task_count": profile.task_count,
+    })
 
     return {"started": True, "count": len(rows)}

@@ -9,9 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crypto import decrypt, encrypt, mask
 from app.db.postgres import get_session
-from app.models.sqlmodels import ProxyKey
+from app.models.sqlmodels import ProxyKey, User
 from app.schemas import ProxyKeyCreate, ProxyKeyResponse
 from app.services.proxy_manager import ProxyManager
+from app.rbac import require_permission
 
 router = APIRouter(prefix="/api/proxy", tags=["proxy"])
 
@@ -26,8 +27,11 @@ def _get_pm() -> ProxyManager:
 
 
 @router.get("/keys", response_model=List[ProxyKeyResponse])
-async def list_keys(session: AsyncSession = Depends(get_session)):
-    result = await session.execute(select(ProxyKey).order_by(ProxyKey.id))
+async def list_keys(
+    user: User = Depends(require_permission("proxy:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(select(ProxyKey).where(ProxyKey.user_id == user.id).order_by(ProxyKey.id))
     rows = result.scalars().all()
     return [_proxy_key_to_response(p) for p in rows]
 
@@ -35,6 +39,7 @@ async def list_keys(session: AsyncSession = Depends(get_session)):
 @router.post("/keys", response_model=ProxyKeyResponse)
 async def add_key(
     body: ProxyKeyCreate,
+    user: User = Depends(require_permission("proxy:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     api_key = body.api_key.strip()
@@ -44,6 +49,7 @@ async def add_key(
     masked = mask(api_key)
     enc = encrypt(api_key)
     pk = ProxyKey(
+        user_id=user.id,
         api_key_enc=enc,
         masked_key=masked,
     )
@@ -60,6 +66,7 @@ async def add_key(
 @router.post("/keys/import", response_model=dict)
 async def import_keys(
     body: dict,
+    user: User = Depends(require_permission("proxy:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     raw_text = str(body.get("raw_text") or body.get("text") or "")
@@ -69,11 +76,11 @@ async def import_keys(
     errors: list[str] = []
     for api_key in lines:
         masked = mask(api_key)
-        exists = await session.execute(select(ProxyKey.id).where(ProxyKey.masked_key == masked))
+        exists = await session.execute(select(ProxyKey.id).where(ProxyKey.user_id == user.id, ProxyKey.masked_key == masked))
         if exists.scalar_one_or_none() is not None:
             duplicate += 1
             continue
-        session.add(ProxyKey(api_key_enc=encrypt(api_key), masked_key=masked))
+        session.add(ProxyKey(user_id=user.id, api_key_enc=encrypt(api_key), masked_key=masked))
         added += 1
     try:
         await session.commit()
@@ -84,8 +91,12 @@ async def import_keys(
 
 
 @router.delete("/keys/{key_id}", response_model=dict)
-async def remove_key(key_id: int, session: AsyncSession = Depends(get_session)):
-    stmt = delete(ProxyKey).where(ProxyKey.id == key_id)
+async def remove_key(
+    key_id: int,
+    user: User = Depends(require_permission("proxy:manage")),
+    session: AsyncSession = Depends(get_session),
+):
+    stmt = delete(ProxyKey).where(ProxyKey.id == key_id, ProxyKey.user_id == user.id)
     result = await session.execute(stmt)
     await session.commit()
     count = result.row_count if result.row_count is not None else 0
@@ -95,8 +106,11 @@ async def remove_key(key_id: int, session: AsyncSession = Depends(get_session)):
 
 
 @router.delete("/keys", response_model=dict)
-async def remove_all_keys(session: AsyncSession = Depends(get_session)):
-    result = await session.execute(delete(ProxyKey))
+async def remove_all_keys(
+    user: User = Depends(require_permission("proxy:manage")),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(delete(ProxyKey).where(ProxyKey.user_id == user.id))
     await session.commit()
     return {"removed": result.rowcount or 0}
 
@@ -109,6 +123,7 @@ async def start_monitor(
     get_current_url: str = "",
     uses_per_proxy: int = 4,
     check_interval: int = 5,
+    user: User = Depends(require_permission("tenant:manage:any")),
     session: AsyncSession = Depends(get_session),
 ):
     if body:
@@ -119,12 +134,12 @@ async def start_monitor(
         check_interval = int(body.get("check_interval") or check_interval)
     pm = _get_pm()
     # Load keys from DB
-    result = await session.execute(select(ProxyKey.api_key_enc).order_by(ProxyKey.id))
+    result = await session.execute(select(ProxyKey.api_key_enc).where(ProxyKey.user_id == user.id).order_by(ProxyKey.id))
     enc_keys = [r[0] for r in result.all()]
     raw_keys = "\n".join(decrypt(enc) for enc in enc_keys)
     pm.configure(raw_keys)
     # load settings
-    settings_row = await _get_app_settings(session)
+    settings_row = await _get_app_settings(session, user.id)
     url_new = get_new_url or settings_row.get("get_new_url_template", "")
     url_cur = get_current_url or settings_row.get("get_current_url_template", "")
     pm.start(
@@ -138,14 +153,14 @@ async def start_monitor(
 
 
 @router.post("/monitor/stop", response_model=dict)
-async def stop_monitor():
+async def stop_monitor(user: User = Depends(require_permission("tenant:manage:any"))):
     pm = _get_pm()
     await pm.stop_async()
     return {"stopped": True}
 
 
 @router.get("/status", response_model=List[ProxyKeyResponse])
-async def proxy_status():
+async def proxy_status(user: User = Depends(require_permission("tenant:read:any"))):
     pm = _get_pm()
     snap = pm.snapshot()
     return [_snapshot_to_response(s) for s in snap]
@@ -153,9 +168,9 @@ async def proxy_status():
 
 # -- helpers ---------------------------------------------------------------
 
-async def _get_app_settings(session: AsyncSession) -> dict:
+async def _get_app_settings(session: AsyncSession, user_id) -> dict:
     result = await session.execute(
-        text("SELECT * FROM app_settings WHERE id = 1")
+        text("SELECT * FROM app_settings WHERE user_id = :user_id"), {"user_id": user_id}
     )
     row = result.mappings().fetchone()
     if not row:

@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     META_APP_ID: str = ""
     META_APP_SECRET: str = ""
     AUTO_EXCHANGE_LONG_LIVED_TOKEN: bool = True
+    TOKEN_REFRESH_THRESHOLD_DAYS: int = 14
+    FACEBOOK_OAUTH_REDIRECT_URI: str = "http://localhost:8000/api/facebook/oauth/callback"
+    FACEBOOK_OAUTH_SCOPES: str = "pages_show_list,pages_read_engagement,pages_manage_posts"
+    FACEBOOK_OAUTH_SUCCESS_URL: str = "http://localhost:3000/accounts"
+
+    # Application sign-in OAuth (separate from Facebook page-management OAuth)
+    AUTH_GOOGLE_CLIENT_ID: str = ""
+    AUTH_GOOGLE_CLIENT_SECRET: str = ""
+    AUTH_GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/auth/oauth/google/callback"
+    AUTH_FACEBOOK_APP_ID: str = ""
+    AUTH_FACEBOOK_APP_SECRET: str = ""
+    AUTH_FACEBOOK_REDIRECT_URI: str = "http://localhost:8000/api/auth/oauth/facebook/callback"
+    AUTH_FRONTEND_CALLBACK_URL: str = "http://localhost:3000/auth/callback"
+    PASSWORD_RESET_URL: str = "http://localhost:3000/reset-password"
+    EXPOSE_PASSWORD_RESET_TOKEN: bool = False
 
     # Browser worker / personal profile posting
     BROWSER_PROFILE_DIR: str = "/app/browser-profiles"

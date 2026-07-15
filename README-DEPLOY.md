@@ -10,7 +10,8 @@
 docker compose up --build -d
 ```
 
-Frontend: `http://localhost:3000`  
+Frontend: `http://localhost:${FRONTEND_PORT}` (default `3000`; this workspace currently uses `3001`)
+
 Backend API docs: `http://localhost:8000/docs`
 
 The stack runs four app services: `frontend`, `backend`, `worker`, plus PostgreSQL and Redis. Long-running comment tasks should be queued through `/api/comment-tasks`; the worker consumes Redis jobs and writes task/log state back to Postgres.
@@ -51,7 +52,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 ## First Admin Password
 
-For the migration stage, requests without an auth token use a default `admin` user so the current UI remains usable.
+All protected requests require authentication. The Alembic RBAC migration promotes the first legacy admin to `super_admin`; it does not create an authentication bypass.
 
 To lock the admin login, call:
 
@@ -88,6 +89,47 @@ Run the included Nginx reverse proxy profile instead:
 ```powershell
 docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile nginx up --build -d nginx
 ```
+
+## GitHub Actions CD
+
+The repo includes `.github/workflows/cd.yml` for production deploys. The workflow:
+
+1. Starts PostgreSQL and upgrades Alembic to `head`.
+2. Runs backend pytest, including RBAC and multi-user isolation tests.
+3. Lints and builds the React 19 frontend.
+4. Validates Docker Compose production config.
+5. SSHes into the production server.
+6. Resets the server repo to the exact tested commit.
+7. Runs:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d --remove-orphans
+```
+
+Required GitHub repository secrets:
+
+```text
+PROD_HOST=your-server-ip-or-domain
+PROD_USER=deploy
+PROD_SSH_KEY=private SSH key for PROD_USER
+PROD_PATH=/opt/flowmeta
+```
+
+Optional secrets:
+
+```text
+PROD_SSH_PORT=22
+PROD_HEALTH_URL=https://your-domain.com/api/health
+```
+
+Server prerequisites:
+
+- Docker and Docker Compose plugin installed.
+- The repo already cloned at `PROD_PATH`.
+- A production `.env` file exists at `PROD_PATH/.env`.
+- `PROD_USER` can run Docker commands.
+
+Recommended GitHub setting: create an `production` environment and require manual approval before deployment.
 
 Production `.env` should include:
 

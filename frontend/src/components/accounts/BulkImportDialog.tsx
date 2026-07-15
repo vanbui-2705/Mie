@@ -62,19 +62,19 @@ export function BulkImportDialog({ open, onClose, onImport }: BulkImportDialogPr
             Nhập Facebook Account
           </h2>
           <p className="mt-1 text-[9pt]" style={{ color: "var(--muted-foreground)" }}>
-            Dán danh sách UID|TOKEN, mỗi dòng một tài khoản. Nhập nhiều dòng vẫn cuộn được và nút xác nhận luôn nằm dưới cùng.
+            Dán danh sách UID|TOKEN, mỗi dòng một tài khoản. Hệ thống sẽ tự lấy tên từ Facebook; có thể nhập thêm UID|TOKEN|TÊN để đặt tên thủ công.
           </p>
         </div>
 
         <div className="min-h-0 flex-1 overflow-auto p-4 sm:p-5">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2 text-[9pt]" style={{ color: "var(--muted-foreground)" }}>
             <span>{lines.length} dòng, {validLines.length} dòng đúng định dạng</span>
-            <span>Định dạng: UID|TOKEN</span>
+            <span>Định dạng: UID|TOKEN hoặc UID|TOKEN|TÊN</span>
           </div>
           <Textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
-            placeholder={"1000123456|EAAG...\n1000654321|EAAG...\n1000765432|EAAG..."}
+            placeholder={"1000123456|EAAG...\n1000654321|EAAG...|Tài khoản bán hàng\n1000765432|EAAG..."}
             className="h-[42dvh] min-h-[180px] max-h-[42dvh] resize-none overflow-y-auto overflow-x-auto text-[9pt] [field-sizing:fixed] sm:min-h-[220px]"
             disabled={importing}
             wrap="off"

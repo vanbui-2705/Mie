@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_user
+from app.rbac import require_permission
 from app.db.postgres import get_session
 from app.models.sqlmodels import BrowserSession, BrowserSessionStatus, User
 from app.services.browser_sessions import (
@@ -24,7 +25,7 @@ router = APIRouter(tags=["browser-sessions"])
 
 @router.get("/api/browser-sessions", response_model=list[dict])
 async def list_browser_sessions(
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:read")),
     session: AsyncSession = Depends(get_session),
 ):
     await expire_old_sessions(session)
@@ -40,7 +41,7 @@ async def list_browser_sessions(
 @router.get("/api/browser-sessions/{session_id}", response_model=dict)
 async def get_browser_session(
     session_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:read")),
     session: AsyncSession = Depends(get_session),
 ):
     item = await _get_user_session(session, user.id, session_id)
@@ -50,7 +51,7 @@ async def get_browser_session(
 @router.post("/api/browser-sessions/{session_id}/stop", response_model=dict)
 async def stop_session(
     session_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     item = await _get_user_session(session, user.id, session_id)
@@ -58,8 +59,12 @@ async def stop_session(
 
 
 @router.get("/remote/{session_id}")
-async def open_remote_browser(session_id: str, session: AsyncSession = Depends(get_session)):
-    item = await _get_session(session, session_id)
+async def open_remote_browser(
+    session_id: str,
+    user: User = Depends(require_permission("browser_session:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    item = await _get_user_session(session, user.id, session_id)
     now = datetime.now(timezone.utc)
     if item.status == BrowserSessionStatus.ERROR:
         raise HTTPException(status_code=503, detail=item.error or "Browser session provider failed")

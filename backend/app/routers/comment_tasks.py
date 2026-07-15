@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_user
+from app.rbac import require_permission
 from app.crypto import encrypt
 from app.db.postgres import get_session
 from app.models.sqlmodels import CommentAction, TaskItem, TaskItemStatus, TaskRun, TaskRunStatus, User
@@ -18,7 +19,7 @@ router = APIRouter(tags=["comment-tasks"])
 @router.post("/api/comment-tasks", response_model=dict)
 async def create_comment_task(
     body: TaskStartRequest,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("task:create")),
     session: AsyncSession = Depends(get_session),
 ):
     items = _build_task_items(body)

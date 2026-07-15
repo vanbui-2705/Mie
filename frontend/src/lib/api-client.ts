@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const TOKEN_KEY = "flowmeta_access_token";
+const USER_KEY = "flowmeta_user";
 
 export class ApiError extends Error {
   constructor(public status: number, public body: unknown) {
@@ -10,8 +10,73 @@ export class ApiError extends Error {
   }
 }
 
-function normalizeError(status: number, body: unknown): string {
-  if (status === 401) return "Phiên đăng nhập hết hạn, vui lòng tải lại trang.";
+export type AuthUser = {
+  id: string;
+  username: string;
+  role: string;
+  roles?: string[];
+  permissions?: string[];
+  email?: string;
+  status?: string;
+};
+
+export function getAuthToken() {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(TOKEN_KEY) || "";
+}
+
+export function getStoredUser(): AuthUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(USER_KEY);
+    return raw ? (JSON.parse(raw) as AuthUser) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setAuthSession(token: string, user: AuthUser) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(TOKEN_KEY, token);
+  window.localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
+export function clearAuthSession() {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(USER_KEY);
+}
+
+function errorDetail(body: unknown): string | null {
+  if (!body || typeof body !== "object" || !("detail" in body)) return null;
+  const detail = (body as Record<string, unknown>).detail;
+  return typeof detail === "string" ? detail : null;
+}
+
+function normalizeError(status: number, body: unknown, path: string): string {
+  const detail = errorDetail(body);
+  if (status === 401 && path === "/api/auth/login") {
+    return detail === "Invalid username or password"
+      ? "Sai tài khoản hoặc mật khẩu."
+      : (detail || "Đăng nhập thất bại.");
+  }
+  if (path === "/api/auth/login") {
+    const loginMessages: Record<string, string> = {
+      "Admin password is not configured": "Tài khoản quản trị chưa được cấu hình mật khẩu.",
+      "User account is disabled": "Tài khoản đã bị vô hiệu hóa.",
+    };
+    return (detail && loginMessages[detail]) || detail || `Đăng nhập thất bại (${status}).`;
+  }
+  if (path === "/api/auth/register") {
+    const registerMessages: Record<string, string> = {
+      "Valid email is required": "Email không hợp lệ.",
+      "Username must be at least 3 characters": "Tên đăng nhập phải có ít nhất 3 ký tự.",
+      "Password must be at least 8 characters": "Mật khẩu phải có ít nhất 8 ký tự.",
+      "Email or username already exists": "Email hoặc tên đăng nhập đã tồn tại.",
+    };
+    return (detail && registerMessages[detail]) || detail || `Đăng ký thất bại (${status}).`;
+  }
+  if (status === 401) return "Phiên đăng nhập hết hạn, vui lòng đăng nhập lại.";
   if (status === 422 && body && typeof body === "object" && "detail" in body) {
     const detail = (body as Record<string, unknown>).detail;
     if (Array.isArray(detail) && detail.length > 0 && typeof detail[0] === "object") {
@@ -32,12 +97,27 @@ export async function apiFetch<T>(
     signal?: AbortSignal;
   },
 ): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: options?.method ?? "GET",
-    headers: { "Content-Type": "application/json" },
-    body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
-    signal: options?.signal,
-  });
+  const token = getAuthToken();
+  const isFormData = typeof FormData !== "undefined" && options?.body instanceof FormData;
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method: options?.method ?? "GET",
+      headers: {
+        ...(!isFormData ? { "Content-Type": "application/json" } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: options?.body === undefined
+        ? undefined
+        : isFormData
+          ? options.body as FormData
+          : JSON.stringify(options.body),
+      signal: options?.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new Error("Không thể kết nối tới máy chủ. Vui lòng kiểm tra kết nối và thử lại.", { cause: error });
+  }
 
   if (!res.ok) {
     let body: unknown;
@@ -46,7 +126,12 @@ export async function apiFetch<T>(
     } catch {
       body = await res.text();
     }
-    throw new Error(normalizeError(res.status, body), { cause: new ApiError(res.status, body) });
+    const isLoginRequest = path === "/api/auth/login";
+    if (res.status === 401 && !isLoginRequest && typeof window !== "undefined" && window.location.pathname !== "/login") {
+      clearAuthSession();
+      window.location.href = "/login";
+    }
+    throw new Error(normalizeError(res.status, body, path), { cause: new ApiError(res.status, body) });
   }
 
   const text = await res.text();
@@ -66,149 +151,10 @@ export async function apiPost<T>(path: string, body: unknown, signal?: AbortSign
   return apiFetch<T>(path, { method: "POST", body, signal });
 }
 
+export async function apiPatch<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
+  return apiFetch<T>(path, { method: "PATCH", body, signal });
+}
+
 export async function apiDelete<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   return apiFetch<T>(path, { method: "DELETE", body, signal });
-}
-
-export interface SSEState<T> {
-  data: T | null;
-  connected: boolean;
-  error: string | null;
-  close: () => void;
-}
-
-export function createSSEClient<T>(
-  url: string,
-  onData: (data: T) => void,
-  opts: { reconnect?: boolean; reconnectBaseMs?: number; reconnectMaxMs?: number } = {},
-): SSEState<T> {
-  const { reconnect = true, reconnectBaseMs = 1000, reconnectMaxMs = 5000 } = opts;
-  let connected = false;
-  let error: string | null = null;
-  const closed = { value: false } as { value: boolean };
-  let retryCount = 0;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let eventSource: EventSource | null = null;
-
-  function calcDelay(): number {
-    const delay = Math.min(reconnectBaseMs * 2 ** retryCount, reconnectMaxMs);
-    retryCount += 1;
-    return delay;
-  }
-
-  function doConnect(): EventSource {
-    closed.value = false;
-    error = null;
-    connected = false;
-    if (eventSource) {
-      try {
-        eventSource.close();
-      } catch {}
-    }
-
-    const es = new EventSource(url);
-    eventSource = es;
-
-    es.onopen = () => {
-      connected = true;
-      error = null;
-      retryCount = 0;
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-    };
-
-    es.onerror = () => {
-      connected = false;
-      es.close();
-      if (!closed.value && reconnect) {
-        error = "Đang kết nối lại...";
-        const delay = calcDelay();
-        reconnectTimer = setTimeout(() => {
-          if (!closed.value) doConnect();
-        }, delay);
-      }
-    };
-
-    es.onmessage = (evt) => {
-      try {
-        onData(JSON.parse(evt.data) as T);
-      } catch {}
-    };
-
-    for (const eventName of ["log", "stats", "proxy_status"]) {
-      es.addEventListener(eventName, (evt: MessageEvent) => {
-        try {
-          onData(JSON.parse(evt.data) as T);
-        } catch {}
-      });
-    }
-
-    return es;
-  }
-
-  doConnect();
-
-  function close() {
-    closed.value = true;
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    try {
-      eventSource?.close();
-    } catch {}
-    eventSource = null;
-    connected = false;
-  }
-
-  return {
-    get data() {
-      return null;
-    },
-    get connected() {
-      return connected;
-    },
-    get error() {
-      return error;
-    },
-    close,
-  };
-}
-
-export function useSSE<T>(
-  url: string,
-  onData: (data: T) => void,
-  opts: { reconnect?: boolean; reconnectBaseMs?: number; reconnectMaxMs?: number } = {},
-): SSEState<T> {
-  const onDataRef = useRef(onData);
-  onDataRef.current = onData;
-
-  const [, setTick] = useState(0);
-  const clientRef = useRef<ReturnType<typeof createSSEClient<T>> | null>(null);
-
-  useEffect(() => {
-    const client = createSSEClient<T>(
-      url,
-      (data) => {
-        onDataRef.current(data);
-        setTick((n) => n + 1);
-      },
-      opts,
-    );
-    clientRef.current = client;
-    return () => {
-      client.close();
-      clientRef.current = null;
-    };
-  }, [url]);
-
-  const client = clientRef.current;
-  return {
-    data: null,
-    connected: client ? client.connected : false,
-    error: client ? client.error : null,
-    close: () => client?.close(),
-  };
 }

@@ -1,18 +1,28 @@
 "use client";
 
+import { Button } from "@/components/ui/button";
+import { clearAuthSession } from "@/lib/api-client";
+import { useAuth } from "@/lib/auth-context";
 import { useHealthCheck } from "@/lib/sse-client";
-import { usePathname } from "next/navigation";
+import { LogOut, UserRound } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
 
 const sectionLabels: Record<string, string> = {
-  "/accounts": "Quản lý hồ sơ",
-  "/auto-comment": "Tương tác tự động",
+  "/accounts": "Quản lý Facebook",
+  "/auto-comment": "Auto Comment",
+  "/auto-post": "Auto Post Facebook",
+  "/auto-share": "Auto Share Facebook",
+  "/scheduled-posts": "Lịch đăng bài",
   "/proxy": "Quản lý Proxy",
+  "/users": "Quản lý người dùng",
   "/settings": "Cài đặt",
 };
 
 export function TopBar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { status } = useHealthCheck({ interval: 30000 });
+  const { user } = useAuth();
   const label = sectionLabels[pathname] ?? "FlowMeta";
 
   const statusColor =
@@ -21,8 +31,12 @@ export function TopBar() {
       : status === "checking"
         ? "var(--warning)"
         : "var(--danger)";
-  const statusLabel =
-    status === "online" ? "Online" : status === "checking" ? "Đang kiểm tra..." : "Offline";
+  const statusLabel = status === "online" ? "Trực tuyến" : status === "checking" ? "Đang kiểm tra..." : "Ngoại tuyến";
+
+  function handleLogout() {
+    clearAuthSession();
+    router.push("/login");
+  }
 
   return (
     <header
@@ -33,18 +47,31 @@ export function TopBar() {
       }}
     >
       <div className="min-w-0">
-        <span className="text-[9pt] font-medium" style={{ color: "var(--text-sub)" }}>
+        <span className="truncate text-[9pt] font-medium" style={{ color: "var(--text-sub)" }}>
           {label}
         </span>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <span
-          className="h-2 w-2 rounded-full"
-          style={{ backgroundColor: statusColor }}
-        />
-        <span className="text-[9pt] font-medium" style={{ color: statusColor }}>
-          {statusLabel}
-        </span>
+      <div className="flex min-w-0 shrink-0 items-center gap-2">
+        <div className="hidden items-center gap-1.5 rounded-md border px-2 py-1 sm:flex" style={{ borderColor: "var(--border)" }}>
+          <UserRound className="h-3.5 w-3.5" style={{ color: "var(--text-sub)" }} />
+          <span className="max-w-36 truncate text-[9pt] font-medium" style={{ color: "var(--text-main)" }}>
+            {user?.username ?? "guest"}
+          </span>
+          {user?.role && (
+            <span className="text-[8pt]" style={{ color: "var(--text-sub)" }}>
+              {user.role}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: statusColor }} />
+          <span className="hidden text-[9pt] font-medium sm:inline" style={{ color: statusColor }}>
+            {statusLabel}
+          </span>
+        </div>
+        <Button type="button" variant="outline" size="icon-sm" onClick={handleLogout} title="Đăng xuất">
+          <LogOut className="h-3.5 w-3.5" />
+        </Button>
       </div>
     </header>
   );

@@ -1,7 +1,5 @@
 import { statusToVariant } from "@/types";
 
-type BadgeVariant = ReturnType<typeof statusToVariant>;
-
 const variantClass: Record<string, string> = {
   success: "status-badge--success",
   warning: "status-badge--warning",

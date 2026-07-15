@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_user
+from app.rbac import require_permission
 from app.db.postgres import get_session
 from app.event_bus import event_bus
 from app.models.sqlmodels import FacebookAccount, ShareTarget, TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus, User
@@ -24,7 +25,7 @@ router = APIRouter(tags=["extension-connector"])
 @router.post("/api/extension/connect", response_model=dict)
 async def connect_extension(
     body: dict = Body(default_factory=dict),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_user_account(session, user.id, str(body.get("account_id") or ""))
@@ -45,7 +46,7 @@ async def connect_extension(
 @router.post("/api/extension/heartbeat", response_model=dict)
 async def extension_heartbeat(
     body: dict = Body(default_factory=dict),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_user_account(session, user.id, str(body.get("account_id") or ""))
@@ -66,7 +67,7 @@ async def poll_extension_job(
     account_id: str = Query(...),
     client_id: str = Query(...),
     timeout: int = Query(20, ge=1, le=30),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_user_account(session, user.id, account_id)
@@ -79,7 +80,7 @@ async def poll_extension_job(
 async def complete_extension_job(
     job_id: str,
     body: dict = Body(default_factory=dict),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:manage")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_user_account(session, user.id, str(body.get("account_id") or ""))
@@ -136,6 +137,7 @@ async def complete_extension_job(
     await session.commit()
 
     await event_bus.publish("log", "log", {
+        "user_id": str(user.id),
         "run_id": run_id,
         "log_index": log_index,
         "uid": uid,
@@ -152,7 +154,7 @@ async def complete_extension_job(
 @router.get("/api/extension/status", response_model=dict)
 async def extension_status(
     account_id: str = Query(...),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("browser_session:read")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_user_account(session, user.id, account_id)

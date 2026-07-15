@@ -6,6 +6,7 @@ import { BulkImportDialog } from "@/components/accounts/BulkImportDialog";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { SectionEyebrow } from "@/components/shared/SectionEyebrow";
+import { TargetDeleteButton } from "@/components/shared/TargetDeleteButton";
 import { apiFetch } from "@/lib/api-client";
 import { Download, FileText, MonitorUp, RefreshCw, RotateCw, ShieldCheck, Users } from "lucide-react";
 import { toast } from "sonner";
@@ -17,6 +18,10 @@ type FacebookAccount = {
   name: string;
   masked_token: string;
   token_status: string;
+  token_expires_at: string | null;
+  token_last_refreshed_at: string | null;
+  token_is_long_lived: boolean;
+  token_refresh_due: boolean;
   last_error: string;
   last_checked_at: string | null;
   browser_status: string;
@@ -42,6 +47,7 @@ type ImportResult = {
   duplicate: number;
   exchanged_long_lived?: number;
   exchange_failed?: number;
+  names_resolved?: number;
   errors: string[];
 };
 
@@ -69,6 +75,17 @@ function browserStatusLabel(status: string) {
   if (status === "checkpoint") return "Checkpoint";
   if (status === "error") return "Lỗi browser";
   return status || "Chưa login";
+}
+
+function tokenExpiryLabel(account: FacebookAccount) {
+  if (!account.token_expires_at) return account.token_is_long_lived ? "Long-lived" : "Chưa rõ hạn";
+  const expires = new Date(account.token_expires_at);
+  const diffMs = expires.getTime() - Date.now();
+  const days = Math.ceil(diffMs / 86400000);
+  if (days < 0) return "Đã hết hạn";
+  if (days === 0) return "Hết hạn hôm nay";
+  const prefix = account.token_is_long_lived ? "LL" : "Token";
+  return `${prefix} còn ${days} ngày`;
 }
 
 export default function AccountsPage() {
@@ -110,7 +127,8 @@ export default function AccountsPage() {
   }, []);
 
   useEffect(() => {
-    loadAll();
+    const timer = setTimeout(() => void loadAll(), 0);
+    return () => clearTimeout(timer);
   }, [loadAll]);
 
   const handleImport = async (text: string) => {
@@ -126,9 +144,15 @@ export default function AccountsPage() {
     const exchangeFailSuffix = result.exchange_failed
       ? `, ${result.exchange_failed} token chưa đổi long-lived`
       : "";
-    toast.success(`Đã nhập ${result.total} account: thêm ${result.added}, refresh ${result.duplicate}${exchangeSuffix}${exchangeFailSuffix}${errorSuffix}.`);
+    const nameSuffix = result.names_resolved ? `, lấy tên ${result.names_resolved}` : "";
+    toast.success(`Đã nhập ${result.total} account: thêm ${result.added}, refresh ${result.duplicate}${nameSuffix}${exchangeSuffix}${exchangeFailSuffix}${errorSuffix}.`);
     await loadAll();
   };
+
+  const handleTargetDeleted = useCallback(async () => {
+    setSelectedAccountId("");
+    await loadAll();
+  }, [loadAll]);
 
   const handleCheck = async (account: FacebookAccount) => {
     setWorkingId(account.id);
@@ -177,7 +201,7 @@ export default function AccountsPage() {
         const credentialHint = result.remote_password
           ? ` Kasm: ${result.remote_username || "kasm_user"} / ${result.remote_password}.`
           : "";
-        toast.success(`Đã mở browser connect.${credentialHint} Login Facebook một lần rồi bấm Check browser. Task sau đó chạy ẩn.`);
+        toast.success(`Đã mở trình duyệt kết nối.${credentialHint} Đăng nhập Facebook một lần rồi bấm Kiểm tra trình duyệt. Các tác vụ sau đó sẽ chạy ẩn.`);
       } else {
         toast.error(result.message || "Chưa cấu hình browser connect.");
       }
@@ -262,6 +286,7 @@ export default function AccountsPage() {
                   <th className="font-semibold px-2 text-left">Tên</th>
                   <th className="font-semibold px-2 text-left">Token</th>
                   <th className="font-semibold px-2 text-left">Token</th>
+                  <th className="font-semibold px-2 text-left">Hạn token</th>
                   <th className="font-semibold px-2 text-left">Browser</th>
                   <th className="font-semibold px-2 text-right" style={{ width: 300 }}>Thao tác</th>
                 </tr>
@@ -270,12 +295,12 @@ export default function AccountsPage() {
                 {loading ? (
                   Array.from({ length: 4 }).map((_, index) => (
                     <tr key={index} style={{ height: 34 }}>
-                      <td colSpan={7}><div className="skeleton-row w-full" /></td>
+                      <td colSpan={8}><div className="skeleton-row w-full" /></td>
                     </tr>
                   ))
                 ) : accounts.length === 0 ? (
                   <tr>
-                    <td colSpan={7}>
+                    <td colSpan={8}>
                       <EmptyState message="Chưa có Facebook Account. Hãy nhập UID|TOKEN để bắt đầu." />
                     </td>
                   </tr>
@@ -298,10 +323,13 @@ export default function AccountsPage() {
                         <td className="px-2">{account.name || "Chưa lấy tên"}</td>
                         <td className="px-2 font-mono" style={{ fontFamily: "var(--font-mono)" }}>{account.masked_token}</td>
                         <td className="px-2"><StatusBadge status={tokenStatusLabel(account.token_status)} /></td>
+                        <td className="px-2" title={account.token_last_refreshed_at ? `Refresh: ${new Date(account.token_last_refreshed_at).toLocaleString("vi-VN")}` : ""}>
+                          <StatusBadge status={account.token_refresh_due ? "Sắp refresh" : tokenExpiryLabel(account)} />
+                        </td>
                         <td className="px-2" title={account.browser_last_error || ""}><StatusBadge status={browserStatusLabel(account.browser_status)} /></td>
                         <td className="px-2">
                           <div className="flex justify-end gap-1.5">
-                            <Button
+                             <Button
                               variant="outline"
                               className="h-7 px-2 text-[8.5pt]"
                               disabled={workingId === account.id}
@@ -343,9 +371,14 @@ export default function AccountsPage() {
                                 handleBrowserStatus(account);
                               }}
                             >
-                              Check browser
-                            </Button>
-                          </div>
+                               Check browser
+                             </Button>
+                             <TargetDeleteButton
+                               target={{ id: `personal:${account.id}`, name: account.name || account.uid, type: "personal" }}
+                               disabled={workingId === account.id}
+                               onDeleted={handleTargetDeleted}
+                             />
+                           </div>
                         </td>
                       </tr>
                     );
@@ -379,7 +412,8 @@ export default function AccountsPage() {
                     <tr style={{ height: 30, backgroundColor: "var(--surface-row)", color: "var(--foreground)" }}>
                       <th className="text-left font-semibold px-3">Page</th>
                       <th className="text-left font-semibold px-3">Page ID</th>
-                      <th className="text-left font-semibold px-3">Quyền</th>
+                       <th className="text-left font-semibold px-3">Quyền</th>
+                       <th className="text-right font-semibold px-3">Thao tác</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -390,9 +424,15 @@ export default function AccountsPage() {
                           <div className="text-[8pt]" style={{ color: "var(--muted-foreground)" }}>{page.category || "Không có category"}</div>
                         </td>
                         <td className="px-3 font-mono" style={{ fontFamily: "var(--font-mono)" }}>{page.page_id}</td>
-                        <td className="px-3" title={permissionText(page.permissions)} style={{ maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--muted-foreground)" }}>
-                          {permissionText(page.permissions) || "Chưa rõ"}
-                        </td>
+                         <td className="px-3" title={permissionText(page.permissions)} style={{ maxWidth: 170, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--muted-foreground)" }}>
+                           {permissionText(page.permissions) || "Chưa rõ"}
+                         </td>
+                         <td className="px-3 text-right">
+                           <TargetDeleteButton
+                             target={{ id: `page:${page.id}`, name: page.page_name, type: "page" }}
+                             onDeleted={loadAll}
+                           />
+                         </td>
                       </tr>
                     ))}
                   </tbody>

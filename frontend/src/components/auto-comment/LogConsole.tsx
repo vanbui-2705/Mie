@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import type { LogEntry, LogLevel } from "@/types";
-import { logLevelFromStatus } from "@/types";
+import { logLevelFromStatus, taskStatusLabel } from "@/types";
 
 type LogConsoleProps = {
   logs: LogEntry[];
@@ -29,10 +29,6 @@ export function LogConsole({ logs, running }: LogConsoleProps) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [logs, running, autoScroll]);
-
-  useEffect(() => {
-    if (!running) setAutoScroll(false);
-  }, [running]);
 
   const handleScroll = useCallback(() => {
     if (!scrollRef.current) return;
@@ -81,7 +77,7 @@ export function LogConsole({ logs, running }: LogConsoleProps) {
                     <TableCell className="px-2 truncate" style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={entry.link}>{entry.link}</TableCell>
                     <TableCell className="whitespace-nowrap px-2">{entry.action}</TableCell>
                     <TableCell className="whitespace-nowrap px-2" style={{ fontFamily: "var(--font-mono)", fontSize: "9.5pt", color: "var(--muted-foreground)" }}>{entry.proxy}</TableCell>
-                    <TableCell className="px-2"><StatusBadge status={entry.status} className="text-[8pt]" /></TableCell>
+                    <TableCell className="px-2"><StatusBadge status={taskStatusLabel(entry.status)} className="text-[8pt]" /></TableCell>
                     <TableCell className="px-2 truncate" style={{ maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: level === "error" ? "var(--danger)" : level === "warning" ? "var(--warning)" : "var(--muted-foreground)" }} title={entry.error}>{entry.error}</TableCell>
                   </TableRow>
                 );

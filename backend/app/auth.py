@@ -1,9 +1,4 @@
-"""Minimal auth helpers for multi-user APIs.
-
-For the current migration stage, requests without an Authorization header are
-assigned to a default admin user. This keeps the existing single-user UI usable
-while new data is stored with user_id from day one.
-"""
+"""Authentication helpers — token issuance, validation, and user resolution."""
 from __future__ import annotations
 
 import hashlib
@@ -13,13 +8,12 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres import get_session
 from app.models.sqlmodels import User, UserStatus
-
 
 DEFAULT_USERNAME = os.environ.get("FLOWMETA_DEFAULT_USER", "admin")
 TOKEN_SECRET = os.environ.get("FLOWMETA_TOKEN_SECRET") or os.environ.get("FERNET_KEY") or "dev-secret"
@@ -77,16 +71,39 @@ async def get_or_create_default_user(session: AsyncSession) -> User:
     return user
 
 
+async def _load_user_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
+    result = await session.execute(
+        select(User).where(User.id == user_id, User.status == UserStatus.ACTIVE)
+    )
+    return result.scalar_one_or_none()
+
+
 async def current_user(
-    authorization: str | None = Header(default=None),
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> User:
-    if authorization and authorization.lower().startswith("bearer "):
-        token_user_id = parse_token(authorization[7:].strip())
-        if token_user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        user = await session.get(User, token_user_id)
-        if user is None or user.status != UserStatus.ACTIVE:
-            raise HTTPException(status_code=401, detail="User disabled or not found")
-        return user
-    return await get_or_create_default_user(session)
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
+    token = auth_header[7:]
+    user_id = parse_token(token)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user = await _load_user_by_id(session, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found or disabled")
+    return user
+
+
+async def optional_current_user(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> User | None:
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header[7:]
+    user_id = parse_token(token)
+    if user_id is None:
+        return None
+    return await _load_user_by_id(session, user_id)

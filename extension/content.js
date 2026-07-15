@@ -2,7 +2,7 @@
   const TAG_RSP = "FLOWMETA_RSP";
   const TAG_MAIN = "FLOWMETA_MAIN";
 
-  const VERSION = "0.1.18";
+  const VERSION = "0.1.29";
   if (window.__FLOWMETA_CONTENT_VERSION === VERSION) return;
   window.__FLOWMETA_CONTENT_VERSION = VERSION;
 

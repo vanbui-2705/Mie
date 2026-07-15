@@ -1,16 +1,18 @@
 """Task execution router — start/stop tasks, list runs, SSE log streaming."""
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 import uuid
 
-from fastapi import APIRouter, Body, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import current_user
+from app.rbac import require_permission
 from app.db.postgres import get_session
 from app.event_bus import event_bus
-from app.models.sqlmodels import TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus
+from app.models.sqlmodels import TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus, User
 from app.schemas import (
     DelaySettingsDTO,
     TaskStartRequest,
@@ -22,8 +24,7 @@ from app.services.proxy_manager import DirectLease, ProxyManager
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 # set from main.py via dependency injection
-_task_runner = None  # type: ignore
-
+_task_runner = None # type: ignore
 
 def _get_task_runner():
     if _task_runner is None:
@@ -33,6 +34,7 @@ def _get_task_runner():
 
 @router.post("/start", response_model=dict)
 async def start_task(
+    user: User = Depends(require_permission("task:create")),
     body: TaskStartRequest | None = Body(default=None),
     action: str = Query("edit", pattern="^(edit|delete|new_comment)$"),
     uid_text: str = Query(""),
@@ -72,26 +74,30 @@ async def start_task(
         post_text=post_text,
         new_text=new_text,
         image_input=image_input,
+        user_id=user.id,
     )
     return {"run_id": run_id, "status": "started"}
 
 
 @router.post("/stop", response_model=dict)
-async def stop_task():
+async def stop_task(
+    user: User = Depends(require_permission("task:cancel")),
+):
     runner = _get_task_runner()
     runner.stop()
     return {"status": "stopping"}
 
 
 @router.post("/{run_id}/cancel", response_model=dict)
-async def cancel_task(run_id: str, session: AsyncSession = Depends(get_session)):
+async def cancel_task(
+    run_id: str,
+    user: User = Depends(require_permission("task:cancel")),
+    session: AsyncSession = Depends(get_session),
+):
+    run = await _get_user_run(session, user.id, run_id)
     runner = _get_task_runner()
-    if runner.active_run_id == run_id:
+    if runner.active_run_id == str(run.id):
         runner.stop()
-    run = await session.get(TaskRun, _uuid(run_id))
-    if run is None:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Run not found")
     run.status = TaskRunStatus.CANCELED
     items_result = await session.execute(
         select(TaskItem).where(
@@ -107,12 +113,14 @@ async def cancel_task(run_id: str, session: AsyncSession = Depends(get_session))
 
 @router.get("", response_model=List[TaskRunSummary])
 async def list_tasks(
+    user: User = Depends(require_permission("task:read")),
     limit: int = Query(10, ge=1, le=100),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
 ):
     result = await session.execute(
         select(TaskRun)
+        .where(TaskRun.user_id == user.id)
         .order_by(desc(TaskRun.created_at))
         .limit(limit)
         .offset(offset)
@@ -133,17 +141,13 @@ async def list_tasks(
 
 
 @router.get("/{run_id}", response_model=TaskRunResponse)
-async def get_task(run_id: str, session: AsyncSession = Depends(get_session)):
-    result = await session.execute(
-        select(TaskRun).where(TaskRun.id == _uuid(run_id))
-    )
-    run = result.scalar_one_or_none()
-    if run is None:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Run not found")
-
+async def get_task(
+    run_id: str,
+    user: User = Depends(require_permission("task:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    run = await _get_user_run(session, user.id, run_id)
     counts = await _item_counts(session, run.id)
-
     return TaskRunResponse(
         id=str(run.id),
         status=run.status,
@@ -157,9 +161,14 @@ async def get_task(run_id: str, session: AsyncSession = Depends(get_session)):
 
 
 @router.get("/{run_id}/logs", response_model=list[dict])
-async def get_task_logs(run_id: str, session: AsyncSession = Depends(get_session)):
+async def get_task_logs(
+    run_id: str,
+    user: User = Depends(require_permission("task:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    run = await _get_user_run(session, user.id, run_id)
     logs_result = await session.execute(
-        select(TaskLog).where(TaskLog.run_id == _uuid(run_id)).order_by(TaskLog.log_index)
+        select(TaskLog).where(TaskLog.run_id == run.id).order_by(TaskLog.log_index)
     )
     return [
         {
@@ -180,9 +189,14 @@ async def get_task_logs(run_id: str, session: AsyncSession = Depends(get_session
 
 
 @router.get("/{run_id}/items", response_model=list[dict])
-async def get_task_items(run_id: str, session: AsyncSession = Depends(get_session)):
+async def get_task_items(
+    run_id: str,
+    user: User = Depends(require_permission("task:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    run = await _get_user_run(session, user.id, run_id)
     items_result = await session.execute(
-        select(TaskItem).where(TaskItem.run_id == _uuid(run_id)).order_by(TaskItem.item_index)
+        select(TaskItem).where(TaskItem.run_id == run.id).order_by(TaskItem.item_index)
     )
     return [
         {
@@ -200,6 +214,13 @@ async def get_task_items(run_id: str, session: AsyncSession = Depends(get_sessio
         }
         for item in items_result.scalars().all()
     ]
+
+
+async def _get_user_run(session: AsyncSession, user_id: uuid.UUID, run_id: str) -> TaskRun:
+    run = await session.get(TaskRun, _uuid(run_id))
+    if run is None or run.user_id != user_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
 
 
 async def _item_counts(session: AsyncSession, run_id: uuid.UUID) -> dict:
@@ -227,5 +248,4 @@ def _uuid(value: str) -> uuid.UUID:
     try:
         return uuid.UUID(value)
     except ValueError:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="Invalid run id") from None

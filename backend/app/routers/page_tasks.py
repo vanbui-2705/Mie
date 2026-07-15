@@ -4,9 +4,11 @@ from __future__ import annotations
 import uuid
 import asyncio
 import json
+import logging
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlsplit, urlunsplit
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -14,24 +16,34 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_user
+from app.rbac import require_permission
 from app.crypto import decrypt, encrypt
 from app.db.postgres import get_session, session_context
 from app.event_bus import event_bus
-from app.models.sqlmodels import CommentAction, ExternalPage, FacebookAccount, FacebookGroup, FacebookPage, ShareCampaign, ShareMode, ShareTarget, SourcePost, TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus, User
+from app.models.sqlmodels import CommentAction, ExternalPage, FacebookAccount, FacebookGroup, FacebookPage, ScheduledPost, ShareCampaign, ShareMode, ShareTarget, SourcePost, TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus, User
 from app.services.browser_profiles import profile_path
-from app.services.extension_queue import enqueue_extension_job, is_extension_online
-from app.services.facebook_graph import get_my_pages, post_page_feed, post_page_media
+from app.services.extension_queue import enqueue_extension_job, is_extension_online, remove_queued_extension_job
+from app.services.facebook_graph import (
+    get_my_pages,
+    post_page_feed,
+    post_page_media,
+    resolve_facebook_group_id,
+)
 from app.services.personal_browser import check_target_access
 from app.services.task_queue import enqueue_browser_job
 
 router = APIRouter(tags=["page-tasks"])
+logger = logging.getLogger("flowmeta.page_tasks")
 UPLOAD_DIR = Path(os.environ.get("FLOWMETA_UPLOAD_DIR", "/app/uploads"))
 EXTENSION_JOB_STALE_SECONDS = int(os.environ.get("FLOWMETA_EXTENSION_JOB_STALE_SECONDS", "180"))
+HARD_BLOCKED_BROWSER_TARGET_STATUSES = {"not_found", "no_permission"}
+EXTENSION_SHARE_CLAIM_TIMEOUT_SECONDS = int(os.environ.get("FLOWMETA_EXTENSION_SHARE_CLAIM_TIMEOUT_SECONDS", "35"))
+_extension_fallback_tasks: set[asyncio.Task] = set()
 
 
 @router.get("/api/post-targets", response_model=list[dict])
 async def list_post_targets(
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_page:read")),
     session: AsyncSession = Depends(get_session),
 ):
     """Return all destinations from the old poster model: personal profile + fanpages."""
@@ -86,23 +98,20 @@ async def list_post_targets(
             "group_id": group.group_id or "",
             "facebook_group_id": str(group.id),
             "facebook_account_id": str(group.facebook_account_id),
-            "name": group.group_name or group.group_url,
+            "name": group.group_name or _facebook_url_label(group.group_url, "Group"),
             "url": group.group_url,
             "status": "extension_online" if available else group.status,
             "available": available,
-            "reason": "" if available else (group.last_error or "Group chua duoc check bang browser profile."),
+            "reason": "" if available else (group.last_error or "Nhóm chưa được kiểm tra bằng hồ sơ trình duyệt."),
         })
     return targets
 
 
 @router.get("/api/share-targets", response_model=list[dict])
 async def list_share_targets(
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:read")),
     session: AsyncSession = Depends(get_session),
 ):
-    pages = (await session.execute(
-        select(FacebookPage).where(FacebookPage.user_id == user.id).order_by(FacebookPage.page_name)
-    )).scalars().all()
     groups = (await session.execute(
         select(FacebookGroup).where(FacebookGroup.user_id == user.id).order_by(FacebookGroup.group_name, FacebookGroup.group_url)
     )).scalars().all()
@@ -110,55 +119,93 @@ async def list_share_targets(
         select(ExternalPage).where(ExternalPage.user_id == user.id).order_by(ExternalPage.page_name, ExternalPage.page_url)
     )).scalars().all()
     targets: list[dict] = []
-    for page in pages:
-        targets.append({
-            "id": f"page:{page.id}",
-            "type": "page",
-            "name": page.page_name,
-            "url": f"https://www.facebook.com/{page.page_id}",
-            "status": page.status,
-            "available": True,
-            "reason": "",
-        })
     for group in groups:
         extension_online = await is_extension_online(str(group.facebook_account_id))
-        available = group.status == "available" and extension_online
+        available = _share_browser_target_available(group.status, extension_online)
         targets.append({
             "id": f"group:{group.id}",
             "type": "group",
-            "name": group.group_name or group.group_url,
+            "name": group.group_name or _facebook_url_label(group.group_url, "Group"),
             "url": group.group_url,
             "status": "extension_online" if available else group.status,
             "available": available,
-            "reason": "" if available else (group.last_error or "Can check/login browser truoc khi share vao group."),
+            "reason": "" if available else (group.last_error or "Cần kết nối tiện ích hoặc kiểm tra/đăng nhập trình duyệt trước khi chia sẻ vào nhóm."),
         })
     for page in external_pages:
         extension_online = await is_extension_online(str(page.facebook_account_id))
-        available = page.status == "available" and extension_online
+        available = _share_browser_target_available(page.status, extension_online)
         targets.append({
             "id": f"external_page:{page.id}",
             "type": "external_page",
-            "name": page.page_name or page.page_url,
+            "name": page.page_name or _facebook_url_label(page.page_url, "Page"),
             "url": page.page_url,
             "status": "extension_online" if available else page.status,
             "available": available,
-            "reason": "" if available else (page.last_error or "Can check/login browser truoc khi share sang page nay."),
+            "reason": "" if available else (page.last_error or "Cần kết nối tiện ích hoặc kiểm tra target trước khi native Share sang Page này."),
         })
     return targets
+
+
+@router.delete("/api/post-targets/{target_type}/{target_id}", response_model=dict)
+async def delete_post_target(
+    target_type: str,
+    target_id: str,
+    user: User = Depends(require_permission("facebook_account:delete")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Delete one owned destination and remove its stale references from schedules."""
+    models = {
+        "personal": FacebookAccount,
+        "page": FacebookPage,
+        "group": FacebookGroup,
+        "external_page": ExternalPage,
+    }
+    model = models.get(target_type)
+    if model is None:
+        raise HTTPException(status_code=400, detail="Loại mục tiêu không hợp lệ")
+    item = await session.get(model, _uuid(target_id))
+    if item is None or item.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Không tìm thấy mục tiêu")
+
+    removed_target_keys = {f"{target_type}:{target_id}"}
+    if target_type == "personal":
+        account_id = item.id
+        pages = (await session.execute(
+            select(FacebookPage.id).where(FacebookPage.user_id == user.id, FacebookPage.facebook_account_id == account_id)
+        )).scalars().all()
+        groups = (await session.execute(
+            select(FacebookGroup.id).where(FacebookGroup.user_id == user.id, FacebookGroup.facebook_account_id == account_id)
+        )).scalars().all()
+        removed_target_keys.update(f"page:{row_id}" for row_id in pages)
+        removed_target_keys.update(f"group:{row_id}" for row_id in groups)
+
+    schedule_references_removed = await _remove_targets_from_schedules(session, user.id, removed_target_keys)
+    await session.delete(item)
+    await session.commit()
+    return {
+        "deleted": True,
+        "target_id": f"{target_type}:{target_id}",
+        "schedule_references_removed": schedule_references_removed,
+    }
 
 
 @router.post("/api/facebook-groups/import", response_model=dict)
 async def import_facebook_groups(
     body: dict = Body(default_factory=dict),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:share")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_user_account(session, user.id, str(body.get("facebook_account_id") or ""))
-    urls = _parse_raw_lines(str(body.get("raw_text") or body.get("text") or ""))
+    targets = _parse_named_facebook_lines(str(body.get("raw_text") or body.get("text") or ""))
     created = 0
     updated = 0
-    for url in urls:
+    token = decrypt(account.user_token_enc)
+    for url, provided_name in targets:
         normalized = _normalize_facebook_url(url)
+        fallback_name = provided_name or _facebook_url_label(normalized, "Group")
+        resolved = await resolve_facebook_group_id(token, normalized)
+        resolved_id = str(resolved.get("group_id") or "") if resolved.get("success") else ""
+        resolved_name = str(resolved.get("group_name") or "") if resolved.get("success") else ""
         result = await session.execute(
             select(FacebookGroup).where(
                 FacebookGroup.user_id == user.id,
@@ -168,11 +215,19 @@ async def import_facebook_groups(
         )
         group = result.scalar_one_or_none()
         if group is None:
-            session.add(FacebookGroup(user_id=user.id, facebook_account_id=account.id, group_url=normalized))
+            session.add(FacebookGroup(
+                user_id=user.id,
+                facebook_account_id=account.id,
+                group_url=normalized,
+                group_id=resolved_id or None,
+                group_name=provided_name or resolved_name or fallback_name or None,
+            ))
             created += 1
         else:
             group.status = "not_checked"
             group.last_error = None
+            group.group_id = resolved_id or group.group_id
+            group.group_name = provided_name or resolved_name or group.group_name or fallback_name or None
             updated += 1
     await session.commit()
     return {"created": created, "updated": updated, "total": created + updated}
@@ -181,7 +236,7 @@ async def import_facebook_groups(
 @router.get("/api/facebook-groups", response_model=list[dict])
 async def list_facebook_groups(
     account_id: str | None = None,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:read")),
     session: AsyncSession = Depends(get_session),
 ):
     stmt = select(FacebookGroup).where(FacebookGroup.user_id == user.id)
@@ -194,7 +249,7 @@ async def list_facebook_groups(
 @router.post("/api/facebook-groups/{group_id}/check", response_model=dict)
 async def check_facebook_group(
     group_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:read")),
     session: AsyncSession = Depends(get_session),
 ):
     group = await _get_user_group(session, user.id, group_id)
@@ -202,7 +257,12 @@ async def check_facebook_group(
     result = await _check_browser_target(str(user.id), str(group.facebook_account_id), group.group_url, "group")
     group.status = str(result.get("status") or ("available" if result.get("success") else "error"))
     group.last_error = "" if result.get("success") else str(result.get("message") or "")
-    group.group_name = str(result.get("title") or group.group_name or "") or None
+    group.group_name = _clean_facebook_title(str(result.get("title") or "")) or group.group_name or None
+    if account is not None and not group.group_id:
+        resolved = await resolve_facebook_group_id(decrypt(account.user_token_enc), group.group_url)
+        if resolved.get("success"):
+            group.group_id = str(resolved.get("group_id") or "") or None
+            group.group_name = str(resolved.get("group_name") or "") or group.group_name
     if account and not result.get("success") and "login" in str(result.get("message", "")).lower():
         account.browser_status = "expired"
         account.browser_last_error = group.last_error
@@ -211,10 +271,34 @@ async def check_facebook_group(
     return _group_dict(group)
 
 
+@router.post("/api/facebook-groups/{group_id}/resolve-id", response_model=dict)
+async def resolve_facebook_group_id_endpoint(
+    group_id: str,
+    user: User = Depends(require_permission("facebook_group:share")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Re-resolve and persist a group's numeric Graph API ID."""
+    group = await _get_user_group(session, user.id, group_id)
+    account = await session.get(FacebookAccount, group.facebook_account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Facebook account not found")
+
+    result = await resolve_facebook_group_id(decrypt(account.user_token_enc), group.group_url)
+    if result.get("success"):
+        group.group_id = str(result.get("group_id") or "") or group.group_id
+        group.group_name = str(result.get("group_name") or "") or group.group_name
+        group.status = "available"
+        group.last_error = ""
+    else:
+        group.last_error = str(result.get("message") or "Cannot resolve group ID")
+    await session.commit()
+    return _group_dict(group)
+
+
 @router.delete("/api/facebook-groups/{group_id}", response_model=dict)
 async def delete_facebook_group(
     group_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:share")),
     session: AsyncSession = Depends(get_session),
 ):
     group = await _get_user_group(session, user.id, group_id)
@@ -226,15 +310,16 @@ async def delete_facebook_group(
 @router.post("/api/external-pages/import", response_model=dict)
 async def import_external_pages(
     body: dict = Body(default_factory=dict),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:share")),
     session: AsyncSession = Depends(get_session),
 ):
     account = await _get_user_account(session, user.id, str(body.get("facebook_account_id") or ""))
-    urls = _parse_raw_lines(str(body.get("raw_text") or body.get("text") or ""))
+    targets = _parse_named_facebook_lines(str(body.get("raw_text") or body.get("text") or ""))
     created = 0
     updated = 0
-    for url in urls:
+    for url, provided_name in targets:
         normalized = _normalize_facebook_url(url)
+        fallback_name = provided_name or _facebook_url_label(normalized, "Page")
         result = await session.execute(
             select(ExternalPage).where(
                 ExternalPage.user_id == user.id,
@@ -244,11 +329,12 @@ async def import_external_pages(
         )
         page = result.scalar_one_or_none()
         if page is None:
-            session.add(ExternalPage(user_id=user.id, facebook_account_id=account.id, page_url=normalized))
+            session.add(ExternalPage(user_id=user.id, facebook_account_id=account.id, page_url=normalized, page_name=fallback_name or None))
             created += 1
         else:
             page.status = "not_checked"
             page.last_error = None
+            page.page_name = provided_name or page.page_name or fallback_name or None
             updated += 1
     await session.commit()
     return {"created": created, "updated": updated, "total": created + updated}
@@ -257,7 +343,7 @@ async def import_external_pages(
 @router.get("/api/external-pages", response_model=list[dict])
 async def list_external_pages(
     account_id: str | None = None,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:read")),
     session: AsyncSession = Depends(get_session),
 ):
     stmt = select(ExternalPage).where(ExternalPage.user_id == user.id)
@@ -270,7 +356,7 @@ async def list_external_pages(
 @router.post("/api/external-pages/{page_id}/check", response_model=dict)
 async def check_external_page(
     page_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:read")),
     session: AsyncSession = Depends(get_session),
 ):
     page = await _get_user_external_page(session, user.id, page_id)
@@ -278,7 +364,7 @@ async def check_external_page(
     result = await _check_browser_target(str(user.id), str(page.facebook_account_id), page.page_url, "external_page")
     page.status = str(result.get("status") or ("available" if result.get("success") else "error"))
     page.last_error = "" if result.get("success") else str(result.get("message") or "")
-    page.page_name = str(result.get("title") or page.page_name or "") or None
+    page.page_name = _clean_facebook_title(str(result.get("title") or "")) or page.page_name or None
     if account and not result.get("success") and "login" in str(result.get("message", "")).lower():
         account.browser_status = "expired"
         account.browser_last_error = page.last_error
@@ -290,7 +376,7 @@ async def check_external_page(
 @router.delete("/api/external-pages/{page_id}", response_model=dict)
 async def delete_external_page(
     page_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:share")),
     session: AsyncSession = Depends(get_session),
 ):
     page = await _get_user_external_page(session, user.id, page_id)
@@ -303,7 +389,7 @@ async def delete_external_page(
 async def create_page_post_task(
     request: Request,
     background: BackgroundTasks = None,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_page:post")),
     session: AsyncSession = Depends(get_session),
 ):
     body, uploads = await _read_page_post_request(request)
@@ -346,9 +432,17 @@ async def create_page_post_task(
 
 
 @router.get("/api/uploads/page-posts/{run_id}/{filename}", response_class=FileResponse)
-async def get_page_post_upload(run_id: str, filename: str):
+async def get_page_post_upload(
+    run_id: str,
+    filename: str,
+    user: User = Depends(require_permission("task:read")),
+    session: AsyncSession = Depends(get_session),
+):
     if not _is_safe_upload_part(run_id) or not _is_safe_upload_part(filename):
         raise HTTPException(status_code=400, detail="Invalid upload path")
+    run = await session.get(TaskRun, _uuid(run_id))
+    if run is None or run.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Upload not found")
     path = (UPLOAD_DIR / "page-posts" / run_id / filename).resolve()
     root = (UPLOAD_DIR / "page-posts").resolve()
     if root not in path.parents or not path.is_file():
@@ -357,14 +451,18 @@ async def get_page_post_upload(run_id: str, filename: str):
 
 
 @router.get("/api/page-post-tasks/{task_id}", response_model=dict)
-async def get_page_post_task(task_id: str, session: AsyncSession = Depends(get_session)):
-    return await _task_summary(session, task_id)
+async def get_page_post_task(
+    task_id: str,
+    user: User = Depends(require_permission("task:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    return await _task_summary(session, task_id, user.id)
 
 
 @router.post("/api/share-campaigns", response_model=dict)
 async def create_share_campaign(
     body: dict = Body(default_factory=dict),
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:share")),
     session: AsyncSession = Depends(get_session),
 ):
     mode = ShareMode(str(body.get("mode") or ShareMode.SHARE_LINK.value))
@@ -372,10 +470,9 @@ async def create_share_campaign(
     if not source_url:
         raise HTTPException(status_code=400, detail="source_post_url is required")
     parsed_targets = _parse_share_targets(body)
-    pages = await _load_user_pages(session, user.id, parsed_targets["page_ids"])
     groups = await _load_user_groups(session, user.id, parsed_targets["group_ids"])
     external_pages = await _load_user_external_pages(session, user.id, parsed_targets["external_page_ids"])
-    if not pages and not groups and not external_pages:
+    if not groups and not external_pages:
         raise HTTPException(status_code=400, detail="targets is required")
     source = SourcePost(
         user_id=user.id,
@@ -395,14 +492,6 @@ async def create_share_campaign(
     )
     session.add(campaign)
     await session.flush()
-    for page in pages:
-        session.add(ShareTarget(
-            campaign_id=campaign.id,
-            user_id=user.id,
-            target_type="page",
-            facebook_page_id=page.id,
-            facebook_account_id=page.facebook_account_id,
-        ))
     for group in groups:
         session.add(ShareTarget(
             campaign_id=campaign.id,
@@ -420,14 +509,14 @@ async def create_share_campaign(
             facebook_account_id=page.facebook_account_id,
         ))
     await session.commit()
-    return {"id": str(campaign.id), "targets": len(pages) + len(groups) + len(external_pages), "status": campaign.status}
+    return {"id": str(campaign.id), "targets": len(groups) + len(external_pages), "status": campaign.status}
 
 
 @router.post("/api/share-campaigns/{campaign_id}/start", response_model=dict)
 async def start_share_campaign(
     campaign_id: str,
     background: BackgroundTasks,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("facebook_group:share")),
     session: AsyncSession = Depends(get_session),
 ):
     campaign_uuid = _uuid(campaign_id)
@@ -466,7 +555,7 @@ async def start_share_campaign(
 @router.get("/api/share-campaigns/{campaign_id}", response_model=dict)
 async def get_share_campaign(
     campaign_id: str,
-    user: User = Depends(current_user),
+    user: User = Depends(require_permission("task:read")),
     session: AsyncSession = Depends(get_session),
 ):
     campaign = await session.get(ShareCampaign, _uuid(campaign_id))
@@ -542,7 +631,7 @@ async def _run_page_post_task(
                 if group.status != "available":
                     failures += 1
                     item.status = TaskItemStatus.FAILED
-                    item.error = group.last_error or "Group chua available. Hay check target bang browser truoc."
+                    item.error = group.last_error or "Nhóm chưa sẵn sàng. Hãy kiểm tra mục tiêu bằng trình duyệt trước."
                     await _log(session, run_id, index, group.group_url, "post_group", {"success": False, "message": item.error})
                     continue
                 queued_browser += 1
@@ -586,7 +675,7 @@ async def _run_page_post_task(
                 if not extension_online and account.browser_status != "logged_in":
                     failures += 1
                     item.status = TaskItemStatus.FAILED
-                    item.error = account.browser_last_error or "Browser profile chua logged_in. Hay login browser truoc."
+                    item.error = account.browser_last_error or "Hồ sơ trình duyệt chưa đăng nhập. Hãy đăng nhập trình duyệt trước."
                     result = {
                         "success": False,
                         "message": item.error,
@@ -622,7 +711,6 @@ async def _run_page_post_task(
 
 
 async def _run_share_task(run_id: str, share_target_ids: list[str], message: str, source_url: str) -> None:
-    final_message = f"{message}\n\n{source_url}".strip()
     try:
         async with session_context() as session:
             failures = 0
@@ -631,43 +719,6 @@ async def _run_share_task(run_id: str, share_target_ids: list[str], message: str
                 target = await session.get(ShareTarget, _uuid(target_id))
                 if target is None:
                     continue
-                if target.target_type == "page" and target.facebook_page_id:
-                    page = await session.get(FacebookPage, target.facebook_page_id)
-                    if page is None:
-                        continue
-                    item = TaskItem(
-                        run_id=_uuid(run_id),
-                        user_id=page.user_id,
-                        item_index=idx,
-                        uid=page.page_id,
-                        target_link=page.page_id,
-                        action="share_page",
-                        status=TaskItemStatus.RUNNING,
-                    )
-                    session.add(item)
-                    await session.flush()
-                    token = decrypt(page.page_access_token_enc)
-                    result = await post_page_feed(page.page_id, token, final_message, source_url)
-                    if not result.get("success") and _is_token_expired_error(str(result.get("message") or "")):
-                        refresh = await _refresh_page_token(session, page)
-                        if refresh.get("success"):
-                            token = decrypt(page.page_access_token_enc)
-                            result = await post_page_feed(page.page_id, token, final_message, source_url)
-                        else:
-                            result["message"] = f"Page token expired; refresh page token failed: {refresh.get('message') or 'unknown error'}"
-                    success = bool(result.get("success"))
-                    failures += 0 if success else 1
-                    item.status = TaskItemStatus.SUCCESS if success else TaskItemStatus.FAILED
-                    item.error = "" if success else str(result.get("message") or "")
-                    item.output_link = str(result.get("post_url") or "") or None
-                    if not success and _is_token_expired_error(item.error):
-                        page.status = "token_expired"
-                    target.status = "success" if success else "failed"
-                    target.output_post_id = item.output_link
-                    target.error = item.error
-                    await _log(session, run_id, idx, page.page_id, "share_page", result)
-                    continue
-
                 browser_target = await _resolve_browser_share_target(session, target)
                 if browser_target is None:
                     failures += 1
@@ -683,10 +734,11 @@ async def _run_share_task(run_id: str, share_target_ids: list[str], message: str
                 )
                 session.add(item)
                 await session.flush()
-                if browser_target["status"] != "available":
+                extension_online = await is_extension_online(str(browser_target["account_id"]))
+                if not _share_browser_target_available(str(browser_target["status"]), extension_online):
                     failures += 1
                     item.status = TaskItemStatus.FAILED
-                    item.error = str(browser_target["error"] or "Target chua available. Hay check target bang browser truoc.")
+                    item.error = str(browser_target["error"] or "Mục tiêu chưa sẵn sàng. Hãy kiểm tra mục tiêu bằng trình duyệt trước.")
                     target.status = "failed"
                     target.error = item.error
                     await _log(session, run_id, idx, str(browser_target["target_url"]), str(browser_target["action"]), {"success": False, "message": item.error})
@@ -704,18 +756,55 @@ async def _run_share_task(run_id: str, share_target_ids: list[str], message: str
                     "account_id": str(browser_target["account_id"]),
                     "uid": str(browser_target["account_id"]),
                     "target_url": str(browser_target["target_url"]),
+                    "target_name": str(browser_target.get("target_name") or ""),
+                    "target_kind": str(browser_target.get("target_kind") or target.target_type),
                     "source_url": source_url,
                     "message": message,
                     "action": str(browser_target["action"]),
                 }
-                if await is_extension_online(str(browser_target["account_id"])):
-                    await enqueue_extension_job(str(browser_target["account_id"]), payload)
+                if extension_online:
+                    job_id = await enqueue_extension_job(str(browser_target["account_id"]), payload)
+                    _schedule_extension_share_fallback(
+                        str(browser_target["account_id"]), job_id, payload
+                    )
                 else:
+                    logger.info(
+                        "Extension offline for account %s; falling back to browser worker for share item %s (%s)",
+                        browser_target["account_id"],
+                        item.id,
+                        browser_target["target_url"],
+                    )
                     await enqueue_browser_job(payload)
             if queued_browser == 0:
                 await _finish(session, run_id, failed=failures > 0)
     except Exception as exc:
         await _fail(run_id, str(exc))
+
+
+def _schedule_extension_share_fallback(account_id: str, job_id: str, payload: dict) -> None:
+    task = asyncio.create_task(
+        _fallback_unclaimed_extension_share(account_id, job_id, payload)
+    )
+    _extension_fallback_tasks.add(task)
+    task.add_done_callback(_extension_fallback_tasks.discard)
+
+
+async def _fallback_unclaimed_extension_share(
+    account_id: str,
+    job_id: str,
+    payload: dict,
+    delay_seconds: int | float = EXTENSION_SHARE_CLAIM_TIMEOUT_SECONDS,
+) -> bool:
+    await asyncio.sleep(delay_seconds)
+    if not await remove_queued_extension_job(account_id, job_id):
+        return False
+    logger.warning(
+        "Extension did not claim share job %s for account %s; falling back to browser worker",
+        job_id,
+        account_id,
+    )
+    await enqueue_browser_job(payload)
+    return True
 
 
 async def _load_user_pages(session: AsyncSession, user_id: uuid.UUID, page_ids: list[str]) -> list[FacebookPage]:
@@ -873,6 +962,30 @@ async def _get_user_external_page(session: AsyncSession, user_id: uuid.UUID, pag
     return page
 
 
+async def _remove_targets_from_schedules(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    target_keys: set[str],
+) -> int:
+    schedules = (await session.execute(
+        select(ScheduledPost).where(ScheduledPost.user_id == user_id)
+    )).scalars().all()
+    removed = 0
+    for schedule in schedules:
+        try:
+            targets = [str(value) for value in json.loads(schedule.targets_json or "[]")]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            targets = []
+        remaining = [value for value in targets if value not in target_keys]
+        removed += len(targets) - len(remaining)
+        if remaining != targets:
+            schedule.targets_json = json.dumps(remaining)
+            if not remaining:
+                schedule.status = "paused"
+                schedule.next_fire_at = None
+    return removed
+
+
 def _parse_post_targets(body: dict) -> dict[str, list[str]]:
     page_ids = [str(v) for v in body.get("page_ids", []) if str(v)]
     group_ids = [str(v) for v in body.get("group_ids", []) if str(v)]
@@ -919,15 +1032,66 @@ def _parse_raw_lines(raw_text: str) -> list[str]:
     return [line.strip() for line in raw_text.replace(",", "\n").splitlines() if line.strip()]
 
 
+def _parse_named_facebook_lines(raw_text: str) -> list[tuple[str, str]]:
+    targets: list[tuple[str, str]] = []
+    for raw_line in raw_text.replace("\r\n", "\n").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = [part.strip() for part in line.split("|", 1)]
+        if len(parts) == 2:
+            first_is_url = "facebook.com" in parts[0].lower() or "fb.com" in parts[0].lower()
+            second_is_url = "facebook.com" in parts[1].lower() or "fb.com" in parts[1].lower()
+            if second_is_url and not first_is_url:
+                targets.append((parts[1], parts[0]))
+                continue
+            if first_is_url:
+                targets.append((parts[0], parts[1]))
+                continue
+        targets.append((line, ""))
+    return targets
+
+
 def _normalize_facebook_url(url: str) -> str:
     value = url.strip()
     if not value:
         raise HTTPException(status_code=400, detail="URL is required")
     if not value.startswith(("http://", "https://")):
         value = f"https://{value}"
-    if "facebook.com" not in value and "fb.com" not in value:
+    parsed = urlsplit(value)
+    hostname = (parsed.hostname or "").lower()
+    if hostname != "facebook.com" and not hostname.endswith(".facebook.com") and hostname != "fb.com" and not hostname.endswith(".fb.com"):
         raise HTTPException(status_code=400, detail=f"Invalid Facebook URL: {url}")
-    return value.split("?")[0].rstrip("/")
+    path = parsed.path.rstrip("/") or "/"
+    query = ""
+    if path.lower().endswith("/profile.php"):
+        profile_id = (parse_qs(parsed.query).get("id") or [""])[0].strip()
+        if profile_id:
+            query = f"id={quote(profile_id, safe='')}"
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, query, ""))
+
+
+def _facebook_url_label(url: str, kind: str) -> str:
+    parsed = urlsplit(url)
+    query_id = (parse_qs(parsed.query).get("id") or [""])[0].strip()
+    if query_id:
+        return f"{kind} {query_id}"
+    parts = [unquote(part).strip() for part in parsed.path.split("/") if part.strip()]
+    ignored = {"groups", "pages", "profile.php", "people", "pg"}
+    candidates = [part for part in parts if part.lower() not in ignored]
+    if not candidates:
+        return f"{kind} chưa xác định"
+    slug = candidates[-1]
+    readable = " ".join(slug.replace("-", " ").replace("_", " ").split())
+    return readable or f"{kind} chưa xác định"
+
+
+def _clean_facebook_title(value: str) -> str:
+    title = " ".join(value.split()).strip()
+    for suffix in (" | Facebook", " - Facebook", " – Facebook"):
+        if title.endswith(suffix):
+            title = title[:-len(suffix)].strip()
+    return title
 
 
 async def _check_browser_target(user_id: str, account_id: str, target_url: str, target_type: str) -> dict:
@@ -941,7 +1105,7 @@ def _group_dict(group: FacebookGroup) -> dict:
         "facebook_account_id": str(group.facebook_account_id),
         "group_url": group.group_url,
         "group_id": group.group_id or "",
-        "group_name": group.group_name or "",
+        "group_name": group.group_name or _facebook_url_label(group.group_url, "Group"),
         "status": group.status,
         "last_error": group.last_error or "",
         "created_at": group.created_at,
@@ -954,7 +1118,7 @@ def _external_page_dict(page: ExternalPage) -> dict:
         "facebook_account_id": str(page.facebook_account_id),
         "page_url": page.page_url,
         "page_id": page.page_id or "",
-        "page_name": page.page_name or "",
+        "page_name": page.page_name or _facebook_url_label(page.page_url, "Page"),
         "status": page.status,
         "last_error": page.last_error or "",
         "created_at": page.created_at,
@@ -971,6 +1135,8 @@ async def _resolve_browser_share_target(session: AsyncSession, target: ShareTarg
             "action": "share_group",
             "account_id": group.facebook_account_id,
             "target_url": group.group_url,
+            "target_name": group.group_name or group.group_url,
+            "target_kind": "group",
             "status": group.status,
             "error": group.last_error,
         }
@@ -983,15 +1149,24 @@ async def _resolve_browser_share_target(session: AsyncSession, target: ShareTarg
             "action": "share_external_page",
             "account_id": page.facebook_account_id,
             "target_url": page.page_url,
+            "target_name": page.page_name or page.page_url,
+            "target_kind": "external_page",
             "status": page.status,
             "error": page.last_error,
         }
     return None
 
 
-async def _task_summary(session: AsyncSession, task_id: str) -> dict:
+def _share_browser_target_available(status: str | None, extension_online: bool) -> bool:
+    normalized = str(status or "").strip().lower()
+    if normalized in HARD_BLOCKED_BROWSER_TARGET_STATUSES:
+        return False
+    return extension_online or normalized == "available"
+
+
+async def _task_summary(session: AsyncSession, task_id: str, user_id: uuid.UUID | None = None) -> dict:
     run = await session.get(TaskRun, _uuid(task_id))
-    if run is None:
+    if run is None or (user_id is not None and run.user_id != user_id):
         raise HTTPException(status_code=404, detail="Task not found")
     await _fail_stale_browser_items(session, run)
     logs_result = await session.execute(select(TaskLog).where(TaskLog.run_id == run.id))
@@ -1150,6 +1325,17 @@ def _is_token_expired_error(message: str) -> bool:
     )
 
 
+def _is_invalid_graph_link_error(message: str) -> bool:
+    lower = (message or "").lower()
+    return (
+        "code 1500" in lower
+        or "url you supplied is invalid" in lower
+        or "cannot parse url" in lower
+        or "khong the phan tich cu phap url" in lower
+        or "không thể phân tích cú pháp url" in lower
+    )
+
+
 async def _refresh_page_token(session: AsyncSession, page: FacebookPage) -> dict:
     account = await session.get(FacebookAccount, page.facebook_account_id)
     if account is None:
@@ -1188,6 +1374,9 @@ async def _refresh_page_token(session: AsyncSession, page: FacebookPage) -> dict
 
 
 async def _log(session: AsyncSession, run_id: str, index: int, page_id: str, action: str, result: dict) -> None:
+    run = await session.get(TaskRun, _uuid(run_id))
+    if run is None:
+        raise HTTPException(status_code=404, detail="Task run not found")
     success = bool(result.get("success"))
     log = TaskLog(
         run_id=_uuid(run_id),
@@ -1203,6 +1392,7 @@ async def _log(session: AsyncSession, run_id: str, index: int, page_id: str, act
     session.add(log)
     await session.commit()
     await event_bus.publish("log", "log", {
+        "user_id": str(run.user_id),
         "run_id": run_id,
         "log_index": index,
         "uid": page_id,

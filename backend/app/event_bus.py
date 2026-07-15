@@ -46,7 +46,7 @@ class EventBus:
         return event_id
 
     async def subscribe(
-        self, channel: Channel, last_id: str | None = None
+        self, channel: Channel, last_id: str | None = None, user_id: object | None = None,
     ) -> AsyncGenerator[tuple[EventId, EventType, Any], None]:
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._subscribers[channel].append(q)
@@ -59,7 +59,7 @@ class EventBus:
                     if eid == last_id:
                         found = True
                         continue
-                    if found:
+                    if found and self._belongs_to_user(data, user_id):
                         yield (eid, etype, data)
                 if found:
                     replay_started = True
@@ -70,16 +70,23 @@ class EventBus:
             while True:
                 try:
                     item = await asyncio.wait_for(q.get(), timeout=30.0)
-                    yield item
+                    if self._belongs_to_user(item[2], user_id):
+                        yield item
                 except asyncio.TimeoutError:
                     yield ("", "ping", None)
                 except asyncio.CancelledError:
                     return
         finally:
-            if replay_started and q in self._subscribers[channel]:
+            if q in self._subscribers[channel]:
                 self._subscribers[channel].remove(q)
             if ping_task is not None:
                 ping_task.cancel()
+
+    @staticmethod
+    def _belongs_to_user(data: Any, user_id: object | None) -> bool:
+        if user_id is None:
+            return True
+        return isinstance(data, dict) and str(data.get("user_id") or "") == str(user_id)
 
     @staticmethod
     async def _ping_loop(q: asyncio.Queue) -> None:
