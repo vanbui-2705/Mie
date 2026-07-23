@@ -549,6 +549,145 @@ class ScheduledPost(Base):
     __table_args__ = (Index("idx_scheduled_posts_user_next_fire", user_id, next_fire_at),)
 
 
+class GoogleSheetConnection(Base):
+    __tablename__ = "google_sheet_connections"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    spreadsheet_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    sheet_name: Mapped[str] = mapped_column(String(255), nullable=False, default="Posts")
+    credentials_enc: Mapped[str] = mapped_column(
+        Text, nullable=False, comment="Fernet-encrypted Google service-account JSON",
+    )
+    service_account_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    poll_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Ho_Chi_Minh")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="connected")
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "spreadsheet_id", "sheet_name",
+            name="uq_google_sheet_connections_user_sheet",
+        ),
+        Index("idx_google_sheet_connections_user", user_id),
+    )
+
+
+class RentalConfig(Base):
+    __tablename__ = "rental_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="nhatrovn")
+    source_credentials_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    province_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    province_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    district_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    district_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    ward_code: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, default=None)
+    ward_name: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, default=None)
+    extra_filters_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    auto_post: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    post_spacing_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=480)
+    post_delay_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    caption_template: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    contact_phone: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    group_match_level: Mapped[str] = mapped_column(String(16), nullable=False, default="district")
+    poll_interval_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Ho_Chi_Minh")
+    google_sheet_connection_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("google_sheet_connections.id", ondelete="SET NULL"),
+        nullable=True, default=None,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    last_post_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("idx_rental_configs_user", user_id),
+    )
+
+
+class RentalRoom(Base):
+    __tablename__ = "rental_rooms"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    config_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("rental_configs.id", ondelete="CASCADE"), nullable=False,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    external_room_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    price: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    area_text: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    address: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    district: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, default=None)
+    ward: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, default=None)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    images_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    caption: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    matched_group_ids_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="new")
+    post_urls_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    posted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("config_id", "external_room_id", name="uq_rental_rooms_config_room"),
+        Index("idx_rental_rooms_user", user_id),
+    )
+
+
 class ShareTarget(Base):
     __tablename__ = "share_targets"
 
