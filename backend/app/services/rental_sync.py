@@ -183,7 +183,12 @@ async def run_rental_sync(get_session=None, adapter=None) -> None:
         )).scalars())
     svc = RentalSyncService(get_session, adapter=adapter)
     for cfg in configs:
-        due = cfg.last_synced_at is None or (now - cfg.last_synced_at).total_seconds() >= cfg.poll_interval_seconds
+        # SQLite drops tzinfo on DateTime(timezone=True); normalize to UTC so the
+        # elapsed-time subtraction against an aware `now` never raises TypeError.
+        last = cfg.last_synced_at
+        if last is not None and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        due = last is None or (now - last).total_seconds() >= cfg.poll_interval_seconds
         if not due:
             continue
         try:
