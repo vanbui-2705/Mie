@@ -70,7 +70,7 @@ async def test_post_due_respects_spacing(session, session_factory, user_id, _ens
     room = (await session.execute(select(RentalRoom).where(RentalRoom.config_id == cfg.id))).scalar_one()
     assert room.status == "new"
     posted = json.loads(room.post_urls_json)
-    assert set(posted.keys()) == {"10"} or set(posted.keys()) == {"11"}
+    assert set(posted.keys()) == {"10"}
 
 
 @pytest.mark.asyncio
@@ -97,3 +97,35 @@ async def test_post_due_retries_on_runner_error(session, session_factory, user_i
     assert room.retry_count == 1
     assert room.status == "new"  # retry_count(1) < MAX_RETRIES(3)
     assert room.error is not None and "boom" in room.error
+
+
+@pytest.mark.asyncio
+async def test_post_due_marks_waiting_groups_when_no_group_resolves(session, session_factory, user_id, _ensure_user):
+    """If every remaining matched fbid fails to resolve to a FacebookGroup row,
+    the room must NOT be silently marked 'posted' (false-success signal).
+    It should be flagged 'waiting_groups' with an error, stay out of 'posted',
+    and posted_at must remain unset since nothing was actually posted."""
+    cfg = _make_config(user_id, last_post_at=None)
+    session.add(cfg)
+    await session.flush()
+    # Note: deliberately NOT seeding a FacebookGroup with group_id "999".
+    room = RentalRoom(config_id=cfg.id, user_id=user_id, external_room_id="P3", title="P3",
+        caption="cap", status="new", matched_group_ids_json=json.dumps(["999"]))
+    session.add(room)
+    await session.commit()
+
+    calls = []
+
+    async def fake_run(**kw):
+        calls.append(kw)
+
+    svc = RentalPostService(session_factory, run_post=fake_run)
+    fired = await svc.post_due(now=datetime.now(timezone.utc))
+    assert len(fired) == 1
+    assert calls == []  # runner must never be invoked - nothing resolvable to post
+
+    from sqlalchemy import select
+    await session.refresh(room)
+    assert room.status == "waiting_groups"
+    assert room.posted_at is None
+    assert room.error is not None and "999" in room.error

@@ -90,15 +90,16 @@ class RentalPostService:
 
                 if row is None:
                     # None of the remaining fbids resolved to a group row.
-                    room.status = "posted"
-                    room.posted_at = now
+                    # This is NOT success — leave the room out of "posted" so
+                    # it doesn't silently vanish from the queue with 0 posts.
+                    room.status = "waiting_groups"
+                    room.error = f"no matching facebook groups resolved for {remaining}"
+                    cfg.last_post_at = now
                     await session.commit()
                     fired.append({
                         "config_id": str(cfg.id), "room_id": str(room.id),
                         "group_id": None, "status": room.status, "skipped": True,
                     })
-                    cfg.last_post_at = now
-                    await session.commit()
                     continue
 
                 run = TaskRun(
