@@ -1,0 +1,141 @@
+import json
+import uuid
+
+import pytest
+
+from app.crypto import encrypt
+from app.models.sqlmodels import RentalConfig, RentalRoom, FacebookGroup, GoogleSheetConnection
+from app.services.nhatrovn_adapter import Room
+from app.services.rental_sync import RentalSyncService, render_caption
+
+
+class FakeAdapter:
+    def __init__(self, rooms):
+        self._rooms = rooms
+
+    async def login(self, u, p):
+        return object()
+
+    async def fetch_rooms(self, client, **kw):
+        return self._rooms
+
+
+class FakeSheets:
+    def __init__(self, fail=False):
+        self.calls = []
+        self._fail = fail
+
+    async def append_rows(self, *, credentials, spreadsheet_id, sheet_name, rows):
+        if self._fail:
+            raise RuntimeError("sheet boom")
+        self.calls.append(rows)
+
+
+def _make_config(user_id, **overrides):
+    defaults = dict(
+        user_id=user_id,
+        name="c",
+        source_type="nhatrovn",
+        source_credentials_enc=encrypt(json.dumps({"username": "x", "password": "y"})),
+        province_code="79",
+        province_name="HCM",
+        district_code="764",
+        district_name="Gò Vấp",
+        caption_template="{title}",
+        contact_phone="0900",
+        poll_interval_seconds=300,
+        post_spacing_seconds=1,
+    )
+    defaults.update(overrides)
+    return RentalConfig(**defaults)
+
+
+def test_render_caption_has_hashtag():
+    room = Room(external_room_id="P1", title="P1", price="3tr", area_text="30m2",
+                address="Gò Vấp", district="Gò Vấp", status="Trống", description="đẹp", images=[])
+    cap = render_caption(
+        "🏠 {title}\n💰 {price} 📐 {area_text}\n📍 {address}\n{description}\n📞 {contact_phone}\n#thuetro #{district_slug}",
+        room, "0900",
+    )
+    assert "#GoVap" in cap and "0900" in cap
+
+
+def test_render_caption_falls_back_on_bad_template():
+    room = Room(external_room_id="P1", title="P1", price="3tr", area_text="30m2",
+                address="Gò Vấp", district="Gò Vấp", status="Trống", description="đẹp", images=[])
+    cap = render_caption("{unknown_field}", room, "0900")
+    assert "P1" in cap and "0900" in cap
+
+
+@pytest.mark.asyncio
+async def test_sync_dedups_and_matches(session, user_id, _ensure_user, session_factory):
+    cfg = _make_config(user_id)
+    session.add(cfg)
+    session.add(FacebookGroup(id=uuid.uuid4(), user_id=user_id, facebook_account_id=uuid.uuid4(),
+                               group_id="10", group_name="Thuê trọ Gò Vấp", group_url="u"))
+    await session.commit()
+    rooms = [Room("P.004", "P.004", district="Gò Vấp", address="Gò Vấp", status="Trống"),
+             Room("P.005", "P.005", district="Quận 1", address="Quận 1", status="Trống")]
+    svc = RentalSyncService(session_factory, adapter=FakeAdapter(rooms))
+    r1 = await svc.sync_config(cfg.id)
+    assert r1 == {"added": 2, "matched": 1, "waiting": 1}
+    r2 = await svc.sync_config(cfg.id)  # re-run: no duplicates
+    assert r2["added"] == 0
+
+
+@pytest.mark.asyncio
+async def test_sync_skips_rented(session, user_id, _ensure_user, session_factory):
+    cfg = _make_config(user_id)
+    session.add(cfg)
+    session.add(FacebookGroup(id=uuid.uuid4(), user_id=user_id, facebook_account_id=uuid.uuid4(),
+                               group_id="10", group_name="Thuê trọ Gò Vấp", group_url="u"))
+    await session.commit()
+    rooms = [Room("V1", "V1", district="Gò Vấp", address="Gò Vấp", status="Trống"),
+             Room("R1", "R1", district="Gò Vấp", address="Gò Vấp", status="Đã thuê")]
+    svc = RentalSyncService(session_factory, adapter=FakeAdapter(rooms))
+    result = await svc.sync_config(cfg.id)
+    assert result["added"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sync_mirrors_to_sheet(session, user_id, _ensure_user, session_factory):
+    conn = GoogleSheetConnection(
+        user_id=user_id, name="sheet", spreadsheet_id="sid", sheet_name="Posts",
+        credentials_enc=encrypt(json.dumps({"client_email": "x@y.z"})),
+        service_account_email="x@y.z",
+    )
+    session.add(conn)
+    await session.flush()
+    cfg = _make_config(user_id, google_sheet_connection_id=conn.id)
+    session.add(cfg)
+    session.add(FacebookGroup(id=uuid.uuid4(), user_id=user_id, facebook_account_id=uuid.uuid4(),
+                               group_id="10", group_name="Thuê trọ Gò Vấp", group_url="u"))
+    await session.commit()
+    rooms = [Room("S1", "S1", district="Gò Vấp", address="Gò Vấp", status="Trống")]
+    fake_sheets = FakeSheets()
+    svc = RentalSyncService(session_factory, adapter=FakeAdapter(rooms), sheets_client=fake_sheets)
+    result = await svc.sync_config(cfg.id)
+    assert result["added"] == 1
+    assert len(fake_sheets.calls) == 1
+    assert fake_sheets.calls[0][0][0] == "S1"
+
+
+@pytest.mark.asyncio
+async def test_sync_sheet_failure_does_not_break(session, user_id, _ensure_user, session_factory):
+    conn = GoogleSheetConnection(
+        user_id=user_id, name="sheet", spreadsheet_id="sid", sheet_name="Posts",
+        credentials_enc=encrypt(json.dumps({"client_email": "x@y.z"})),
+        service_account_email="x@y.z",
+    )
+    session.add(conn)
+    await session.flush()
+    cfg = _make_config(user_id, google_sheet_connection_id=conn.id)
+    session.add(cfg)
+    session.add(FacebookGroup(id=uuid.uuid4(), user_id=user_id, facebook_account_id=uuid.uuid4(),
+                               group_id="10", group_name="Thuê trọ Gò Vấp", group_url="u"))
+    await session.commit()
+    rooms = [Room("F1", "F1", district="Gò Vấp", address="Gò Vấp", status="Trống")]
+    fake_sheets = FakeSheets(fail=True)
+    svc = RentalSyncService(session_factory, adapter=FakeAdapter(rooms), sheets_client=fake_sheets)
+    result = await svc.sync_config(cfg.id)
+    assert result == {"added": 1, "matched": 1, "waiting": 0}
