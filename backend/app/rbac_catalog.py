@@ -14,6 +14,7 @@ PERMISSIONS: tuple[str, ...] = (
     "task:read:any", "task:cancel:any",
     "scheduled_post:read", "scheduled_post:create", "scheduled_post:update", "scheduled_post:delete",
     "google_sheet:read", "google_sheet:create", "google_sheet:update", "google_sheet:delete",
+    "rental:read", "rental:create", "rental:update", "rental:delete",
     "proxy:read", "proxy:manage", "settings:read", "settings:update",
     "browser_session:read", "browser_session:manage",
     "audit_log:read", "tenant:read:any", "tenant:manage:any",
