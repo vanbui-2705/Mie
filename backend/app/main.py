@@ -27,7 +27,7 @@ from app.db.postgres import close_db, get_session, session_context
 from app.db.redis import close_redis
 from app.event_bus import event_bus
 from app.models.sqlmodels import FacebookAccount, Profile, UserStatus
-from app.routers import auth, auth_oauth, browser_sessions, comment_tasks, extension_connector, facebook_accounts, facebook_oauth, graph, health, page_tasks, profiles, proxy, roles, scheduled_posts, settings as settings_router, tasks
+from app.routers import auth, auth_oauth, browser_sessions, comment_tasks, extension_connector, facebook_accounts, facebook_oauth, google_sheets, graph, health, page_tasks, profiles, proxy, roles, scheduled_posts, settings as settings_router, tasks
 from app.services.profile_manager import ProfileManager
 from app.services.proxy_manager import ProxyManager
 from app.services.scheduled_post_service import enqueue_due_posts
@@ -111,6 +111,11 @@ async def _scheduler_tick() -> None:
             fired = await enqueue_due_posts()
             if fired:
                 log.info("scheduled posts fired: %s", fired)
+
+            from app.services.rental_sync import run_rental_sync
+            from app.services.rental_post import run_rental_posting
+            await run_rental_sync()
+            await run_rental_posting()
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -148,6 +153,7 @@ app.include_router(comment_tasks.router)
 app.include_router(tasks.router)
 app.include_router(page_tasks.router)
 app.include_router(scheduled_posts.router)
+app.include_router(google_sheets.router)
 app.include_router(extension_connector.router)
 app.include_router(proxy.router)
 app.include_router(graph.router)

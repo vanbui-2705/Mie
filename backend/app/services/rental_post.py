@@ -146,3 +146,18 @@ class RentalPostService:
                 })
 
         return fired
+
+
+async def run_rental_posting(get_session=None) -> None:
+    """Post one throttled batch of due rental rooms.
+
+    `get_session` is injectable so tests can pass the shared SQLite test
+    session instead of the production Postgres `session_context`.
+    """
+    if get_session is None:
+        from app.db.postgres import session_context
+        get_session = session_context
+    try:
+        await RentalPostService(get_session).post_due()
+    except Exception:
+        logger.exception("rental posting failed")

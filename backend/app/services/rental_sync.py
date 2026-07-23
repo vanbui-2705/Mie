@@ -165,3 +165,28 @@ class RentalSyncService:
                     logger.warning("rental sheet mirror %s failed: %s", config_id, exc)
 
         return {"added": added, "matched": matched, "waiting": waiting}
+
+
+async def run_rental_sync(get_session=None, adapter=None) -> None:
+    """Sync every RentalConfig that is due (past its poll interval).
+
+    `get_session` is injectable so tests can pass the shared SQLite test
+    session instead of the production Postgres `session_context`.
+    """
+    if get_session is None:
+        from app.db.postgres import session_context
+        get_session = session_context
+    now = datetime.now(timezone.utc)
+    async with get_session() as session:
+        configs = list((await session.execute(
+            select(RentalConfig).where(RentalConfig.status != "paused")
+        )).scalars())
+    svc = RentalSyncService(get_session, adapter=adapter)
+    for cfg in configs:
+        due = cfg.last_synced_at is None or (now - cfg.last_synced_at).total_seconds() >= cfg.poll_interval_seconds
+        if not due:
+            continue
+        try:
+            await svc.sync_config(cfg.id)
+        except Exception:
+            logger.exception("rental sync failed for config %s", cfg.id)
