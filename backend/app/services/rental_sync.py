@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -33,7 +34,7 @@ def render_caption(template: str, room: Room, contact_phone: str) -> str:
             district=room.district or "",
             district_slug=slug,
         )
-    except (KeyError, IndexError, ValueError):
+    except Exception:
         # Bad/unknown placeholder in a user-supplied template: fall back, never crash sync.
         return f"{room.title}\n{room.price} {room.area_text}\n{room.address}\n{contact_phone}"
 
@@ -66,7 +67,6 @@ class RentalSyncService:
                     select(RentalRoom.external_room_id).where(RentalRoom.config_id == cfg.id)
                 )).scalars()
             )
-            user_id = cfg.user_id
             province_code = cfg.province_code
             district_code = cfg.district_code
             district_name = cfg.district_name
@@ -101,6 +101,8 @@ class RentalSyncService:
 
         async with self._get_session() as session:
             cfg = await session.get(RentalConfig, config_id)
+            if cfg is None:
+                return {"added": 0, "matched": 0, "waiting": 0}
             added = matched = waiting = 0
             mirror_rows: list[list[str]] = []
 
@@ -113,6 +115,7 @@ class RentalSyncService:
                 room_district = room.district or district_name
                 gids = match_group_ids(room_district or "", groups)
                 status = "new" if gids else "waiting_groups"
+                caption_room = replace(room, district=room_district)
 
                 session.add(RentalRoom(
                     config_id=cfg.id,
@@ -126,7 +129,7 @@ class RentalSyncService:
                     ward=room.ward or ward_name,
                     description=room.description,
                     images_json=json.dumps(room.images),
-                    caption=render_caption(caption_template, room, contact_phone),
+                    caption=render_caption(caption_template, caption_room, contact_phone),
                     matched_group_ids_json=json.dumps(gids) if gids else None,
                     status=status,
                 ))

@@ -2,6 +2,7 @@ import json
 import uuid
 
 import pytest
+from sqlalchemy import select
 
 from app.crypto import encrypt
 from app.models.sqlmodels import RentalConfig, RentalRoom, FacebookGroup, GoogleSheetConnection
@@ -67,6 +68,14 @@ def test_render_caption_falls_back_on_bad_template():
     assert "P1" in cap and "0900" in cap
 
 
+def test_render_caption_bad_placeholder_does_not_crash():
+    room = Room(external_room_id="P2", title="Phòng đẹp quận 1", price="3tr", area_text="30m2",
+                address="Gò Vấp", district="Gò Vấp", status="Trống", description="đẹp", images=[])
+    cap = render_caption("{title.nonexistent}", room, "0900")
+    assert cap
+    assert "Phòng đẹp quận 1" in cap
+
+
 @pytest.mark.asyncio
 async def test_sync_dedups_and_matches(session, user_id, _ensure_user, session_factory):
     cfg = _make_config(user_id)
@@ -95,6 +104,30 @@ async def test_sync_skips_rented(session, user_id, _ensure_user, session_factory
     svc = RentalSyncService(session_factory, adapter=FakeAdapter(rooms))
     result = await svc.sync_config(cfg.id)
     assert result["added"] == 1
+
+    rented = (await session.execute(
+        select(RentalRoom).where(RentalRoom.external_room_id == "R1")
+    )).scalar_one_or_none()
+    assert rented is None
+
+
+@pytest.mark.asyncio
+async def test_sync_caption_uses_config_district_when_room_missing(session, user_id, _ensure_user, session_factory):
+    cfg = _make_config(user_id, district_name="Gò Vấp", caption_template="{district_slug}")
+    session.add(cfg)
+    session.add(FacebookGroup(id=uuid.uuid4(), user_id=user_id, facebook_account_id=uuid.uuid4(),
+                               group_id="10", group_name="Thuê trọ Gò Vấp", group_url="u"))
+    await session.commit()
+    rooms = [Room("D1", "D1", district=None, address="somewhere", status="Trống")]
+    svc = RentalSyncService(session_factory, adapter=FakeAdapter(rooms))
+    result = await svc.sync_config(cfg.id)
+    assert result["added"] == 1
+
+    room_row = (await session.execute(
+        select(RentalRoom).where(RentalRoom.external_room_id == "D1")
+    )).scalar_one()
+    assert room_row.district == "Gò Vấp"
+    assert room_row.caption == "GoVap"
 
 
 @pytest.mark.asyncio
