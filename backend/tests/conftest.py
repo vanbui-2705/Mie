@@ -81,3 +81,14 @@ async def _ensure_user(session: AsyncSession, user_id: uuid.UUID) -> None:
     if result.scalar_one_or_none() is None:
         session.add(User(id=user_id, username=f"test-{user_id.hex[:8]}", password_hash=None))
         await session.flush()
+
+
+@pytest.fixture
+def session_factory(session):
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _factory():
+        yield session
+
+    return _factory
