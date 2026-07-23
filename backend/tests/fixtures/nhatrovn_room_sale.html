@@ -1,0 +1,147 @@
+<!--
+  Fixture: response fragment of POST https://quanly.nhatrovn.vn/main/room-sale/search
+  Faithful reconstruction of the real room-card markup (class hooks + nesting preserved).
+  Values are sanitized: phone numbers masked, image ids replaced with {id} placeholders,
+  data-key / data-house_key replaced with fake 24-hex ids. No real tokens/cookies.
+  Two cards: room A (status "Trống", district Bình Chánh) and room B (status "Đã thuê",
+  district Củ Chi) to exercise the parser + group matcher.
+  See nhatrovn_notes.md for the selector table this fixture supports.
+-->
+<div class="row">
+
+  <div class="col-md-6 col-lg-6 col-xlg-4 m-b-10 content-room"
+       data-key="a1a1a1a1a1a1a1a1a1a1a1a1"
+       data-house_key="b2b2b2b2b2b2b2b2b2b2b2b2">
+    <div class="card card-body p-2 m-b-10">
+      <div class="row">
+        <div class="col-4 col-lg-3 text-center p-l-15 p-r-0">
+          <a href="#"><img src="/view-image-room/b2b2b2b2b2b2b2b2b2b2b2b2/images-room/b2b2b2b2b2b2b2b2b2b2b2b2/a1a1a1a1a1a1a1a1a1a1a1a1/000000000000000000000001.jpg?v=0.0" /></a>
+        </div>
+        <div class="col-8 col-lg-9 p-l-5">
+          <span><i class="mdi mdi-account-plus fs-40 text-info c-pointer c-red"></i></span>
+          <div class="row">
+            <div class="col-12">
+              <p class="text-color-room-caretaker text-center fs-13 p-t-5 p-b-5">
+                <span class="span-house">B311</span>
+                <span class="span-house">-</span>
+                <span class="span-house">32/21 VÕ VĂN HÁT, X. Bình Chánh</span>
+                <span class="small span-house d-none">0900000000</span>
+                <span class="small c-pointer text-red">[Ẩn/hiện]</span>
+              </p>
+            </div>
+            <div class="col-12 text-left p-r-20">
+              <span class="small fs-i fs-9">23/07/2026 10:15:46</span>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-4 small">
+              <span>Diện tích:</span>
+              <span class="fw-800">20m2</span>
+            </div>
+            <div class="col-4 small p-r-2 p-l-2">
+              <span>Vị trí:</span>
+              <span class="fw-800">Lầu 3</span>
+            </div>
+            <div class="col-4 small p-r-0">
+              <span>Cọc giữ chổ:</span>
+              <span class="fw-800">2,000,000</span>
+            </div>
+          </div>
+
+          <div class="small text-red">
+            <span>Giá cho thuê:</span>
+            <span class="fw-700">3,200,000</span>
+          </div>
+
+          <div class="col-12 small">
+            <span>Trạng thái:</span>
+            <span class="fw-700">Trống</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-12">
+          <div class="text-color-room-live text-left fs-11">
+            <span class="small">
+              <a class="text-color-room-live fs-10" href="https://maps.google.com/?q=10.7,106.6">
+                <i class="mdi mdi-google-maps text-success"></i>
+                <span class="text-success">Link GoogleMap</span>
+              </a>
+            </span>
+            <span class="small c-pointer text-red">[Ẩn/hiện nội thất]</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-6 col-lg-6 col-xlg-4 m-b-10 content-room"
+       data-key="c3c3c3c3c3c3c3c3c3c3c3c3"
+       data-house_key="d4d4d4d4d4d4d4d4d4d4d4d4">
+    <div class="card card-body p-2 m-b-10">
+      <div class="row">
+        <div class="col-4 col-lg-3 text-center p-l-15 p-r-0">
+          <a href="#"><img src="/view-image-room/d4d4d4d4d4d4d4d4d4d4d4d4/images-room/d4d4d4d4d4d4d4d4d4d4d4d4/c3c3c3c3c3c3c3c3c3c3c3c3/000000000000000000000002.jpg?v=0.0" /></a>
+        </div>
+        <div class="col-8 col-lg-9 p-l-5">
+          <span><i class="mdi mdi-account-plus fs-40 text-info c-pointer c-red"></i></span>
+          <div class="row">
+            <div class="col-12">
+              <p class="text-color-room-caretaker text-center fs-13 p-t-5 p-b-5">
+                <span class="span-house">A102</span>
+                <span class="span-house">-</span>
+                <span class="span-house">15 Nguyễn Văn A, H. Củ Chi</span>
+                <span class="small span-house d-none">0900000000</span>
+                <span class="small c-pointer text-red">[Ẩn/hiện]</span>
+              </p>
+            </div>
+            <div class="col-12 text-left p-r-20">
+              <span class="small fs-i fs-9">22/07/2026 08:00:00</span>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="col-4 small">
+              <span>Diện tích:</span>
+              <span class="fw-800">25m2</span>
+            </div>
+            <div class="col-4 small p-r-2 p-l-2">
+              <span>Vị trí:</span>
+              <span class="fw-800">Trệt</span>
+            </div>
+            <div class="col-4 small p-r-0">
+              <span>Cọc giữ chổ:</span>
+              <span class="fw-800">3,000,000</span>
+            </div>
+          </div>
+
+          <div class="small text-red">
+            <span>Giá cho thuê:</span>
+            <span class="fw-700">2,800,000</span>
+          </div>
+
+          <div class="col-12 small">
+            <span>Trạng thái:</span>
+            <span class="fw-700">Đã thuê</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="col-12">
+          <div class="text-color-room-live text-left fs-11">
+            <span class="small">
+              <a class="text-color-room-live fs-10" href="https://maps.google.com/?q=10.9,106.5">
+                <i class="mdi mdi-google-maps text-success"></i>
+                <span class="text-success">Link GoogleMap</span>
+              </a>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
