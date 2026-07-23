@@ -36,6 +36,7 @@ async def test_append_rows_posts_values() -> None:
         seen["url"] = str(request.url)
         seen["body"] = request.content.decode()
         seen["method"] = request.method
+        seen["params"] = dict(request.url.params)
         return httpx.Response(200, json={"updates": {"updatedRows": 1}})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -51,6 +52,8 @@ async def test_append_rows_posts_values() -> None:
     assert ":append" in seen["url"]
     assert seen["method"] == "POST"
     assert "P1" in seen["body"]
+    assert seen["params"]["valueInputOption"] == "USER_ENTERED"
+    assert seen["params"]["insertDataOption"] == "INSERT_ROWS"
 
 
 @pytest.mark.asyncio
@@ -63,6 +66,7 @@ async def test_update_cells_puts_values() -> None:
         seen["url"] = str(request.url)
         seen["body"] = request.content.decode()
         seen["method"] = request.method
+        seen["params"] = dict(request.url.params)
         return httpx.Response(200, json={"updatedRows": 1})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -79,3 +83,4 @@ async def test_update_cells_puts_values() -> None:
     assert "A2%3AB2" in seen["url"] or "A2:B2" in seen["url"]
     assert seen["method"] == "PUT"
     assert "P1" in seen["body"]
+    assert seen["params"]["valueInputOption"] == "USER_ENTERED"

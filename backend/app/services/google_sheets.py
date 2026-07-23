@@ -231,12 +231,15 @@ class GoogleSheetsClient:
             token = await self._access_token(client, normalized)
             rng = quote(f"'{sheet_name.replace(chr(39), chr(39) * 2)}'!A1", safe="")
             url = f"https://sheets.googleapis.com/v4/spreadsheets/{quote(sid, safe='')}/values/{rng}:append"
-            resp = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {token}"},
-                params={"valueInputOption": "USER_ENTERED", "insertDataOption": "INSERT_ROWS"},
-                json={"values": rows},
-            )
+            try:
+                resp = await client.post(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"valueInputOption": "USER_ENTERED", "insertDataOption": "INSERT_ROWS"},
+                    json={"values": rows},
+                )
+            except httpx.HTTPError as exc:
+                raise GoogleSheetsError("Could not connect to Google Sheets") from exc
             if resp.status_code >= 400:
                 raise GoogleSheetsError(_google_error_message(resp, "Ghi Google Sheet thất bại"))
 
@@ -261,12 +264,15 @@ class GoogleSheetsClient:
             token = await self._access_token(client, normalized)
             rng = quote(f"'{sheet_name.replace(chr(39), chr(39) * 2)}'!{a1_range}", safe="")
             url = f"https://sheets.googleapis.com/v4/spreadsheets/{quote(sid, safe='')}/values/{rng}"
-            resp = await client.put(
-                url,
-                headers={"Authorization": f"Bearer {token}"},
-                params={"valueInputOption": "USER_ENTERED"},
-                json={"values": values},
-            )
+            try:
+                resp = await client.put(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    params={"valueInputOption": "USER_ENTERED"},
+                    json={"values": values},
+                )
+            except httpx.HTTPError as exc:
+                raise GoogleSheetsError("Could not connect to Google Sheets") from exc
             if resp.status_code >= 400:
                 raise GoogleSheetsError(_google_error_message(resp, "Cập nhật Google Sheet thất bại"))
 
