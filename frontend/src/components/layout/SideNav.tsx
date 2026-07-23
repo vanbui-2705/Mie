@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { CalendarClock, Globe2, Menu, MessageSquare, Send, Settings, Share2, UserCog, Users, X } from "lucide-react";
+import { CalendarClock, FileSpreadsheet, Globe2, Menu, MessageSquare, Send, Settings, Share2, UserCog, Users, X } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 
@@ -12,6 +12,7 @@ const navItems = [
   { name: "Auto Comment", href: "/auto-comment", icon: MessageSquare, permission: "task:create" },
   { name: "Auto Post", href: "/auto-post", icon: Send, permission: "facebook_page:post" },
   { name: "Lịch đăng", href: "/scheduled-posts", icon: CalendarClock, permission: "scheduled_post:read" },
+  { name: "Nguồn Sheets", href: "/google-sheets", icon: FileSpreadsheet, permission: "google_sheet:read" },
   { name: "Auto Share", href: "/auto-share", icon: Share2, permission: "facebook_group:share" },
   { name: "Proxy", href: "/proxy", icon: Globe2, permission: "proxy:read" },
   { name: "Users", href: "/users", icon: UserCog, permission: "user:read" },

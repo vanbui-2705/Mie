@@ -86,6 +86,7 @@ function normalizeError(status: number, body: unknown, path: string): string {
     return "Dữ liệu không hợp lệ.";
   }
   if (status >= 500) return "Lỗi máy chủ nội bộ.";
+  if (detail) return detail;
   return `Yêu cầu thất bại (${status}).`;
 }
 
