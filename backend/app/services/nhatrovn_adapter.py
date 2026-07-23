@@ -24,7 +24,7 @@ def _label_value(card, label: str) -> str:
     target = label.strip().rstrip(":")
     for span in card.select("span"):
         if span.get_text(strip=True).rstrip(":") == target:
-            val = span.find_next("span")
+            val = span.find_next_sibling("span")
             return val.get_text(strip=True) if val else ""
     return ""
 
