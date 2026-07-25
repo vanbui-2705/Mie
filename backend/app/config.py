@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # Server
     HOST: str = "0.0.0.0"
     PORT: int = 8000
+    SCHEDULER_ENABLED: bool = True
+    SCHEDULER_INTERVAL_SECONDS: int = 60
 
     # Defaults (overridden by app_settings table)
     USES_PER_PROXY_DEFAULT: int = 4
@@ -61,6 +63,7 @@ class Settings(BaseSettings):
     # Browser worker / personal profile posting
     BROWSER_PROFILE_DIR: str = "/app/browser-profiles"
     UPLOAD_DIR: str = "/app/uploads"
+    COMMENT_IMAGE_MAX_BYTES: int = 10 * 1024 * 1024
     BROWSER_WORKER_CONCURRENCY: int = 1
     BROWSER_PROVIDER: str = "kasm"
     BROWSERLESS_WS_URL: str = ""

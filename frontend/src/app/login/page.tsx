@@ -8,9 +8,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { apiFetch, apiGet, setAuthSession, type AuthUser } from "@/lib/api-client";
+import { API_BASE, apiFetch, apiGet, getApiBase, setAuthSession, type AuthUser } from "@/lib/api-client";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 type Feedback = { type: "success" | "error"; message: string } | null;
 type ProviderStatus = { google: boolean; facebook: boolean };
 
@@ -114,5 +113,17 @@ function OAuthButton({ provider, label, enabled }: { provider: "google" | "faceb
   if (!enabled) {
     return <button type="button" className={`${className} cursor-not-allowed bg-slate-50 text-slate-400`} disabled>{enabled === undefined ? `Đang kiểm tra ${label}...` : `${label} chưa cấu hình`}</button>;
   }
-  return <a className={`${className} text-slate-800 hover:bg-slate-50`} href={`${API_BASE}/api/auth/oauth/${provider}/start`}>Tiếp tục với {label}</a>;
+  const oauthPath = `/api/auth/oauth/${provider}/start`;
+  return (
+    <a
+      className={`${className} text-slate-800 hover:bg-slate-50`}
+      href={`${API_BASE}${oauthPath}`}
+      onClick={(event) => {
+        event.preventDefault();
+        window.location.assign(`${getApiBase()}${oauthPath}`);
+      }}
+    >
+      Tiếp tục với {label}
+    </a>
+  );
 }

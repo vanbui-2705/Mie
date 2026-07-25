@@ -75,6 +75,8 @@ class NhatrovnAdapter:
             address = " ".join(address_parts)
 
             external_room_id = card.get("data-key") or room_code or ""
+            if not external_room_id:
+                continue
 
             images = [
                 src
@@ -101,6 +103,8 @@ class NhatrovnAdapter:
         client = self._client()
         try:
             resp = await client.get("/login")
+            if resp.status_code >= 400:
+                raise NhatrovnError(f"Trang đăng nhập lỗi HTTP {resp.status_code}")
             soup = BeautifulSoup(resp.text, "html.parser")
 
             form = None
@@ -150,6 +154,8 @@ class NhatrovnAdapter:
                 password_field: password,
             }
             resp = await client.post("/login", data=payload)
+            if resp.status_code >= 400:
+                raise NhatrovnError(f"Đăng nhập nhatrovn lỗi HTTP {resp.status_code}")
 
             final_path = resp.url.path
             has_password_field = bool(
@@ -191,6 +197,7 @@ class NhatrovnAdapter:
         rooms: list[Room] = []
         seen: set[str] = set()
         last_key = ""
+        exhausted = False
 
         for _ in range(max_pages):
             data = {
@@ -206,14 +213,23 @@ class NhatrovnAdapter:
             )
             if resp.status_code >= 400:
                 raise NhatrovnError(f"Tìm phòng lỗi HTTP {resp.status_code}")
+            if resp.url.path == "/login" or BeautifulSoup(
+                resp.text, "html.parser",
+            ).find("input", attrs={"type": "password"}):
+                raise NhatrovnError("Phiên đăng nhập nhatrovn đã hết hạn")
 
             batch = self.parse_rooms(resp.text)
             new_rooms = [r for r in batch if r.external_room_id not in seen]
             if not new_rooms:
+                exhausted = True
                 break
 
             rooms.extend(new_rooms)
             seen.update(r.external_room_id for r in new_rooms)
             last_key = batch[-1].external_room_id
 
+        if not exhausted and max_pages > 0:
+            raise NhatrovnError(
+                f"Đã chạm giới hạn {max_pages} trang; kết quả đồng bộ có thể chưa đầy đủ"
+            )
         return rooms

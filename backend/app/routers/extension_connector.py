@@ -16,7 +16,7 @@ from app.auth import current_user
 from app.rbac import require_permission
 from app.db.postgres import get_session
 from app.event_bus import event_bus
-from app.models.sqlmodels import FacebookAccount, ShareTarget, TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus, User
+from app.models.sqlmodels import FacebookAccount, PublicationJob, ShareTarget, TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus, User
 from app.services.extension_queue import dequeue_extension_job, is_extension_online, mark_extension_online
 
 router = APIRouter(tags=["extension-connector"])
@@ -73,6 +73,23 @@ async def poll_extension_job(
     account = await _get_user_account(session, user.id, account_id)
     await mark_extension_online(str(account.id), client_id)
     job = await dequeue_extension_job(str(account.id), timeout)
+    if job and job.get("publication_job_id"):
+        publication = await session.get(
+            PublicationJob, _uuid(str(job["publication_job_id"])),
+        )
+        if (
+            publication is None
+            or publication.user_id != user.id
+            or publication.status not in {"dispatching", "queued", "running"}
+        ):
+            task_item_id = job.get("task_item_id")
+            if task_item_id:
+                item = await session.get(TaskItem, int(task_item_id))
+                if item and item.status in {TaskItemStatus.PENDING, TaskItemStatus.RUNNING}:
+                    item.status = TaskItemStatus.CANCELED
+                    item.error = "Publication job was canceled before execution"
+                    await session.commit()
+            job = None
     return {"job": job}
 
 

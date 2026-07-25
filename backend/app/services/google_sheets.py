@@ -19,6 +19,7 @@ GOOGLE_SCOPES = " ".join((
     "https://www.googleapis.com/auth/drive.readonly",
 ))
 SPREADSHEET_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,255}$")
+A1_RANGE_RE = re.compile(r"^[A-Z]{1,3}[1-9][0-9]*:[A-Z]{1,3}[1-9][0-9]*$")
 
 
 class GoogleSheetsError(Exception):
@@ -223,11 +224,11 @@ class GoogleSheetsClient:
         spreadsheet_id: str,
         sheet_name: str,
         rows: list[list[str]],
-    ) -> None:
+    ) -> dict:
         normalized = normalize_service_account_credentials(credentials)
         sid = parse_spreadsheet_id(spreadsheet_id)
 
-        async def _do(client: httpx.AsyncClient) -> None:
+        async def _do(client: httpx.AsyncClient) -> dict:
             token = await self._access_token(client, normalized)
             rng = quote(f"'{sheet_name.replace(chr(39), chr(39) * 2)}'!A1", safe="")
             url = f"https://sheets.googleapis.com/v4/spreadsheets/{quote(sid, safe='')}/values/{rng}:append"
@@ -242,6 +243,11 @@ class GoogleSheetsClient:
                 raise GoogleSheetsError("Could not connect to Google Sheets") from exc
             if resp.status_code >= 400:
                 raise GoogleSheetsError(_google_error_message(resp, "Ghi Google Sheet thất bại"))
+            try:
+                payload = resp.json()
+            except ValueError as exc:
+                raise GoogleSheetsError("Google Sheets returned an invalid write response") from exc
+            return payload if isinstance(payload, dict) else {}
 
         if self._http_client is not None:
             return await _do(self._http_client)
@@ -256,11 +262,11 @@ class GoogleSheetsClient:
         sheet_name: str,
         a1_range: str,
         values: list[list[str]],
-    ) -> None:
+    ) -> dict:
         normalized = normalize_service_account_credentials(credentials)
         sid = parse_spreadsheet_id(spreadsheet_id)
 
-        async def _do(client: httpx.AsyncClient) -> None:
+        async def _do(client: httpx.AsyncClient) -> dict:
             token = await self._access_token(client, normalized)
             rng = quote(f"'{sheet_name.replace(chr(39), chr(39) * 2)}'!{a1_range}", safe="")
             url = f"https://sheets.googleapis.com/v4/spreadsheets/{quote(sid, safe='')}/values/{rng}"
@@ -275,11 +281,82 @@ class GoogleSheetsClient:
                 raise GoogleSheetsError("Could not connect to Google Sheets") from exc
             if resp.status_code >= 400:
                 raise GoogleSheetsError(_google_error_message(resp, "Cập nhật Google Sheet thất bại"))
+            try:
+                payload = resp.json()
+            except ValueError as exc:
+                raise GoogleSheetsError("Google Sheets returned an invalid write response") from exc
+            return payload if isinstance(payload, dict) else {}
 
         if self._http_client is not None:
             return await _do(self._http_client)
         async with httpx.AsyncClient(timeout=20) as client:
             return await _do(client)
+
+    async def read_values(
+        self,
+        *,
+        credentials: dict[str, str],
+        spreadsheet_id: str,
+        sheet_name: str,
+        a1_range: str,
+    ) -> list[list[str]]:
+        normalized = normalize_service_account_credentials(credentials)
+        sid = parse_spreadsheet_id(spreadsheet_id)
+        if not A1_RANGE_RE.fullmatch(str(a1_range or "")):
+            raise GoogleSheetsError("Invalid A1 range")
+
+        async def _do(client: httpx.AsyncClient) -> list[list[str]]:
+            token = await self._access_token(client, normalized)
+            full_range = (
+                f"'{sheet_name.replace(chr(39), chr(39) * 2)}'!{a1_range}"
+            )
+            payload = await _get_json(
+                client,
+                (
+                    "https://sheets.googleapis.com/v4/spreadsheets/"
+                    f"{quote(sid, safe='')}/values/{quote(full_range, safe='')}"
+                ),
+                headers={"Authorization": f"Bearer {token}"},
+                params={
+                    "majorDimension": "ROWS",
+                    "valueRenderOption": "FORMATTED_VALUE",
+                },
+            )
+            values = payload.get("values", [])
+            if not isinstance(values, list):
+                return []
+            return [
+                [str(cell) for cell in row]
+                for row in values
+                if isinstance(row, list)
+            ]
+
+        if self._http_client is not None:
+            return await _do(self._http_client)
+        async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+            return await _do(client)
+
+    async def find_row_by_value(
+        self,
+        *,
+        credentials: dict[str, str],
+        spreadsheet_id: str,
+        sheet_name: str,
+        value: str,
+        max_row: int = 10000,
+    ) -> int | None:
+        max_row = max(2, min(int(max_row), 50000))
+        rows = await self.read_values(
+            credentials=credentials,
+            spreadsheet_id=spreadsheet_id,
+            sheet_name=sheet_name,
+            a1_range=f"A2:A{max_row}",
+        )
+        expected = str(value)
+        for row_number, row in enumerate(rows, start=2):
+            if row and row[0] == expected:
+                return row_number
+        return None
 
 
 def _sign_jwt(credentials: dict[str, str], claims: dict) -> str:

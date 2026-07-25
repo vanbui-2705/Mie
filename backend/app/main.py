@@ -27,7 +27,7 @@ from app.db.postgres import close_db, get_session, session_context
 from app.db.redis import close_redis
 from app.event_bus import event_bus
 from app.models.sqlmodels import FacebookAccount, Profile, UserStatus
-from app.routers import auth, auth_oauth, browser_sessions, comment_tasks, extension_connector, facebook_accounts, facebook_oauth, google_sheets, graph, health, page_tasks, profiles, proxy, rental, roles, scheduled_posts, settings as settings_router, tasks
+from app.routers import auth, auth_oauth, browser_sessions, comment_tasks, extension_connector, facebook_accounts, facebook_oauth, google_sheets, graph, health, page_tasks, profiles, proxy, rental, roles, scheduled_posts, sheet_campaigns, settings as settings_router, tasks
 from app.services.profile_manager import ProfileManager
 from app.services.proxy_manager import ProxyManager
 from app.services.scheduled_post_service import enqueue_due_posts
@@ -60,17 +60,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # wire singletons into router modules
     tasks._task_runner = runner
     proxy._proxy_manager = pm
-    scheduler_task = asyncio.create_task(_scheduler_tick())
+    scheduler_task = asyncio.create_task(_scheduler_tick()) if settings.SCHEDULER_ENABLED else None
     app.state.scheduler_task = scheduler_task
 
     try:
         yield
     finally:
-        scheduler_task.cancel()
-        try:
-            await scheduler_task
-        except asyncio.CancelledError:
-            pass
+        if scheduler_task is not None:
+            scheduler_task.cancel()
+            try:
+                await scheduler_task
+            except asyncio.CancelledError:
+                pass
 
     # Shutdown — ordered
     await pm.stop_async()
@@ -108,19 +109,73 @@ async def _scheduler_tick() -> None:
     log = logging.getLogger("flowmeta.scheduler")
     while True:
         try:
-            fired = await enqueue_due_posts()
-            if fired:
-                log.info("scheduled posts fired: %s", fired)
-
+            from app.services.sheet_sync import run_sheet_sync
+            from app.services.sheet_post import SheetPostService
+            from app.services.sheet_writeback import run_sheet_writebacks
             from app.services.rental_sync import run_rental_sync
-            from app.services.rental_post import run_rental_posting
-            await run_rental_sync()
-            await run_rental_posting()
+            from app.services.rental_post import RentalPostService
+            from app.services.rental_sheet_mirror import run_rental_sheet_mirror
+            from app.services.publication_jobs import (
+                reconcile_publication_jobs,
+                recover_stale_publication_jobs,
+            )
+
+            await asyncio.gather(
+                _run_scheduler_service("scheduled_posts", enqueue_due_posts(), log),
+                _run_scheduler_service("sheet_sync", run_sheet_sync(session_context), log),
+                _run_scheduler_service("rental_sync", run_rental_sync(), log),
+            )
+            await _run_scheduler_service(
+                "publication_recovery",
+                recover_stale_publication_jobs(session_context),
+                log,
+            )
+            await _run_scheduler_service(
+                "publication_reconcile",
+                reconcile_publication_jobs(session_context),
+                log,
+            )
+            await asyncio.gather(
+                _run_scheduler_service(
+                    "sheet_post", SheetPostService(session_context).post_due(), log,
+                ),
+                _run_scheduler_service(
+                    "rental_post", RentalPostService(session_context).post_due(), log,
+                ),
+                _run_scheduler_service(
+                    "sheet_writeback", run_sheet_writebacks(session_context), log,
+                ),
+                _run_scheduler_service(
+                    "rental_sheet_mirror",
+                    run_rental_sheet_mirror(session_context),
+                    log,
+                ),
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception("scheduler tick error")
-        await asyncio.sleep(60)
+        await asyncio.sleep(max(5, settings.SCHEDULER_INTERVAL_SECONDS))
+
+
+async def _run_scheduler_service(
+    name: str,
+    operation,
+    log: logging.Logger,
+    timeout_seconds: int = 55,
+):
+    try:
+        result = await asyncio.wait_for(operation, timeout=timeout_seconds)
+        if result:
+            log.info("scheduler service %s: %s", name, result)
+        return result
+    except asyncio.CancelledError:
+        raise
+    except asyncio.TimeoutError:
+        log.error("scheduler service %s timed out after %ss", name, timeout_seconds)
+    except Exception:
+        log.exception("scheduler service %s failed", name)
+    return None
 
 
 # ─── App factory ───────────────────────────────────────────────────────────────
@@ -154,6 +209,7 @@ app.include_router(tasks.router)
 app.include_router(page_tasks.router)
 app.include_router(scheduled_posts.router)
 app.include_router(google_sheets.router)
+app.include_router(sheet_campaigns.router)
 app.include_router(rental.router)
 app.include_router(extension_connector.router)
 app.include_router(proxy.router)

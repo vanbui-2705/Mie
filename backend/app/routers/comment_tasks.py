@@ -1,11 +1,16 @@
 """Queued comment/edit/delete task endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import re
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_user
+from app.config import settings
 from app.rbac import require_permission
 from app.crypto import encrypt
 from app.db.postgres import get_session
@@ -14,6 +19,55 @@ from app.schemas import TaskStartRequest
 from app.services.task_queue import build_comment_job, enqueue_task
 
 router = APIRouter(tags=["comment-tasks"])
+COMMENT_IMAGE_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+def _matches_image_type(content: bytes, content_type: str) -> bool:
+    if content_type == "image/jpeg":
+        return content.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return content.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/webp":
+        return len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP"
+    if content_type == "image/gif":
+        return content.startswith((b"GIF87a", b"GIF89a"))
+    return False
+
+
+@router.post("/api/comment-tasks/upload", response_model=dict)
+async def upload_comment_image(
+    image: UploadFile = File(...),
+    user: User = Depends(require_permission("task:create")),
+):
+    content_type = str(image.content_type or "").lower()
+    suffix = COMMENT_IMAGE_TYPES.get(content_type)
+    if suffix is None:
+        raise HTTPException(status_code=415, detail="Only JPEG, PNG, WebP, or GIF images are supported")
+    max_bytes = max(1, settings.COMMENT_IMAGE_MAX_BYTES)
+    content = await image.read(max_bytes + 1)
+    await image.close()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded image is empty")
+    if len(content) > max_bytes:
+        max_mb = max_bytes / (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"Image exceeds the {max_mb:g} MB limit")
+    if not _matches_image_type(content, content_type):
+        raise HTTPException(status_code=400, detail="Uploaded file content does not match its image type")
+    original_stem = Path(image.filename or "image").stem
+    safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", original_stem).strip("._")[:80] or "image"
+    upload_dir = Path(settings.UPLOAD_DIR) / "comment-tasks" / str(user.id)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    path = upload_dir / f"{uuid.uuid4().hex}_{safe_stem}{suffix}"
+    path.write_bytes(content)
+    return {
+        "path": str(path),
+        "filename": path.name,
+        "size": len(content),
+        "content_type": content_type,
+    }
 
 
 @router.post("/api/comment-tasks", response_model=dict)

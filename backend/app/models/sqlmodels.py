@@ -590,6 +590,126 @@ class GoogleSheetConnection(Base):
     )
 
 
+class SheetCampaign(Base):
+    __tablename__ = "sheet_campaigns"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("google_sheet_connections.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    default_targets_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    default_schedule_mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="NOW",
+    )
+    schedule_slots_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    active_weekdays_json: Mapped[str] = mapped_column(
+        Text, nullable=False, default="[0,1,2,3,4,5,6]",
+    )
+    timezone: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="Asia/Ho_Chi_Minh",
+    )
+    max_posts_per_day: Mapped[int] = mapped_column(Integer, nullable=False, default=20)
+    min_post_gap_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=300)
+    late_policy: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="publish_now",
+    )
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    last_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    last_sync_attempt_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("connection_id", name="uq_sheet_campaign_connection"),
+        Index("idx_sheet_campaigns_user", user_id),
+    )
+
+
+class SheetSourceItem(Base):
+    __tablename__ = "sheet_source_items"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("google_sheet_connections.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("sheet_campaigns.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    external_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    sheet_row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    link: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    media_urls_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    media_paths_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    targets_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    schedule_mode: Mapped[str] = mapped_column(String(16), nullable=False, default="NOW")
+    requested_publish_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    scheduled_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    validation_error: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None,
+    )
+    queued_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "campaign_id", "external_id",
+            name="uq_sheet_source_campaign_external",
+        ),
+        Index("idx_sheet_source_user_status", user_id, status),
+        Index("idx_sheet_source_campaign_row", campaign_id, sheet_row_number),
+    )
+
+
 class RentalConfig(Base):
     __tablename__ = "rental_configs"
 
@@ -624,6 +744,9 @@ class RentalConfig(Base):
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    last_sync_attempt_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None,
     )
     last_post_at: Mapped[Optional[datetime]] = mapped_column(
@@ -674,6 +797,15 @@ class RentalRoom(Base):
     )
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    source_status: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    media_paths_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    mirror_status: Mapped[Optional[str]] = mapped_column(
+        String(32), nullable=True, default=None,
+    )
+    mirror_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
@@ -685,6 +817,189 @@ class RentalRoom(Base):
     __table_args__ = (
         UniqueConstraint("config_id", "external_room_id", name="uq_rental_rooms_config_room"),
         Index("idx_rental_rooms_user", user_id),
+    )
+
+
+class PublicationJob(Base):
+    """Durable per-target publication state.
+
+    A queued browser/extension task is intentionally not a successful post.
+    Final success is reconciled from the linked TaskItem.
+    """
+
+    __tablename__ = "publication_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    rental_room_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("rental_rooms.id", ondelete="CASCADE"),
+        nullable=True, default=None,
+    )
+    sheet_source_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sheet_source_items.id", ondelete="CASCADE"),
+        nullable=True, default=None,
+    )
+    source_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    target_external_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, default=None,
+    )
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    task_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("task_runs.id", ondelete="SET NULL"),
+        nullable=True, default=None,
+    )
+    task_item_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("task_items.id", ondelete="SET NULL"),
+        nullable=True, default=None,
+    )
+    facebook_post_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True, default=None,
+    )
+    facebook_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    result_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    started_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "rental_room_id", "target_type", "target_id",
+            name="uq_publication_jobs_rental_target",
+        ),
+        UniqueConstraint(
+            "sheet_source_item_id", "source_version", "target_type", "target_id",
+            name="uq_publication_jobs_sheet_version_target",
+        ),
+        Index("idx_publication_jobs_due", status, scheduled_at, next_retry_at),
+        Index("idx_publication_jobs_user", user_id),
+        Index("idx_publication_jobs_task_item", task_item_id),
+    )
+
+
+class RentalSheetMirrorJob(Base):
+    __tablename__ = "rental_sheet_mirror_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    rental_room_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("rental_rooms.id", ondelete="CASCADE"), nullable=False,
+    )
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("google_sheet_connections.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    sheet_row_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    payload_hash: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, default=None,
+    )
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "rental_room_id", "connection_id",
+            name="uq_rental_sheet_mirror_room_connection",
+        ),
+        Index(
+            "idx_rental_sheet_mirror_due",
+            status, next_retry_at,
+        ),
+        Index("idx_rental_sheet_mirror_user", user_id),
+    )
+
+
+class SheetWritebackJob(Base):
+    __tablename__ = "sheet_writeback_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    source_item_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sheet_source_items.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    next_retry_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    synced_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source_item_id", "source_version",
+            name="uq_sheet_writeback_item_version",
+        ),
+        Index("idx_sheet_writeback_due", status, next_retry_at),
+        Index("idx_sheet_writeback_user", user_id),
     )
 
 

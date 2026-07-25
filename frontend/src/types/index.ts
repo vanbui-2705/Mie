@@ -123,6 +123,201 @@ export interface TaskConfig {
   action: 'edit' | 'delete' | 'new_comment';
 }
 
+// ─── Rental (Đăng trọ tự động) ──────────────────────────────────────────────
+
+export interface GoogleSheetConnection {
+  id: string;
+  name: string;
+  spreadsheet_id: string;
+  spreadsheet_url: string;
+  sheet_name: string;
+  service_account_email: string;
+  poll_interval_seconds: number;
+  timezone: string;
+  status: string;
+  last_synced_at: string | null;
+  last_error: string | null;
+  created_at: string | null;
+}
+
+export interface FacebookPostTarget {
+  id: string;
+  type: 'page' | 'personal' | 'group';
+  name: string;
+  status: string;
+  available: boolean;
+  reason?: string;
+  page_id?: string;
+  group_id?: string;
+  url?: string;
+  uid?: string;
+}
+
+export type SheetScheduleMode = 'NOW' | 'EXACT' | 'AUTO';
+
+export interface SheetCampaign {
+  id: string;
+  connection_id: string;
+  name: string;
+  default_targets: string[];
+  default_schedule_mode: SheetScheduleMode;
+  schedule_slots: string[];
+  active_weekdays: number[];
+  timezone: string;
+  max_posts_per_day: number;
+  min_post_gap_seconds: number;
+  late_policy: 'publish_now' | 'miss';
+  max_retries: number;
+  enabled: boolean;
+  status: string;
+  last_synced_at: string | null;
+  last_error: string | null;
+}
+
+export interface SheetCampaignInput {
+  connection_id: string;
+  name: string;
+  default_targets: string[];
+  default_schedule_mode: SheetScheduleMode;
+  schedule_slots: string[];
+  active_weekdays: number[];
+  timezone: string;
+  max_posts_per_day: number;
+  min_post_gap_seconds: number;
+  late_policy: 'publish_now' | 'miss';
+  max_retries: number;
+  enabled: boolean;
+}
+
+export interface SheetSourceItem {
+  id: string;
+  campaign_id: string;
+  external_id: string;
+  sheet_row_number: number;
+  content: string;
+  media_urls: string[];
+  targets: string[];
+  schedule_mode: string;
+  scheduled_at: string | null;
+  source_version: number;
+  status: string;
+  validation_error: string | null;
+  queued_at: string | null;
+  completed_at: string | null;
+}
+
+export interface PublicationJob {
+  id: string;
+  source_item_id: string | null;
+  source_version: number;
+  target_type: string;
+  target_id: string;
+  status: string;
+  attempt_count: number;
+  scheduled_at: string;
+  facebook_url: string | null;
+  error: string | null;
+}
+
+export interface PublicationHealth {
+  publication_jobs: Record<string, number>;
+  stale_jobs: number;
+  sheet_campaign_errors: number;
+  rental_config_errors: number;
+}
+
+export interface RentalConfig {
+  id: string;
+  name: string;
+  source_type: string;
+  province_code: string;
+  province_name: string;
+  district_code: string;
+  district_name: string;
+  ward_code: string | null;
+  ward_name: string | null;
+  auto_post: boolean;
+  post_spacing_seconds: number;
+  post_delay_seconds: number;
+  caption_template: string;
+  contact_phone: string;
+  group_match_level: string;
+  poll_interval_seconds: number;
+  timezone: string;
+  google_sheet_connection_id: string | null;
+  status: string;
+  last_synced_at: string | null;
+  last_sync_attempt_at: string | null;
+  last_post_at: string | null;
+  last_error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface RentalRoom {
+  id: string;
+  config_id: string;
+  external_room_id: string;
+  title: string;
+  price: string;
+  area_text: string;
+  address: string;
+  district: string | null;
+  ward: string | null;
+  description: string;
+  images: string[];
+  caption: string;
+  matched_group_ids: string[];
+  status: string;
+  post_urls: Record<string, string>;
+  posted_at: string | null;
+  retry_count: number;
+  error: string | null;
+  source_status: string;
+  last_seen_at: string | null;
+  media_paths: string[];
+  mirror_status: string | null;
+  mirror_error: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface RentalPublicationJob {
+  id: string;
+  rental_room_id: string;
+  target_type: string;
+  target_id: string;
+  target_external_id: string | null;
+  status: string;
+  attempt_count: number;
+  max_attempts: number;
+  scheduled_at: string | null;
+  next_retry_at: string | null;
+  facebook_url: string | null;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface RentalConfigInput {
+  name: string;
+  credentials?: { username: string; password: string };
+  province_code: string;
+  province_name: string;
+  district_code: string;
+  district_name: string;
+  ward_code?: string | null;
+  ward_name?: string | null;
+  caption_template?: string;
+  contact_phone?: string;
+  post_spacing_seconds?: number;
+  post_delay_seconds?: number;
+  poll_interval_seconds?: number;
+  auto_post?: boolean;
+  google_sheet_connection_id?: string | null;
+  timezone?: string;
+}
+
 export function maskToken(token: string): string {
   if (token.length <= 4) return '****';
   if (token.length <= 8) return `${token.slice(0, 2)}****${token.slice(-2)}`;

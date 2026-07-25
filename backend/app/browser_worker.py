@@ -11,7 +11,7 @@ from app.db.redis import close_redis
 from app.event_bus import event_bus
 from sqlalchemy import select
 
-from app.models.sqlmodels import FacebookAccount, ShareTarget, TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus
+from app.models.sqlmodels import FacebookAccount, PublicationJob, ShareTarget, TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus
 from app.services.browser_profiles import profile_path
 from app.services.personal_browser import post_to_group, post_to_timeline, share_to_target
 from app.services.task_queue import acquire_browser_account_lock, dequeue_browser_job, release_browser_account_lock
@@ -52,10 +52,16 @@ async def process_browser_job(job: dict) -> bool:
     action = _action_for_job(job_type)
     log_index = int(job.get("log_index") or 999999)
     task_item_id = job.get("task_item_id")
+    publication_job_id = job.get("publication_job_id")
     share_target_id = job.get("share_target_id")
     lock_owner = f"{run_id}:{task_item_id or log_index}"
 
     try:
+        if publication_job_id and not await _publication_job_active(
+            publication_job_id, user_id, task_item_id,
+        ):
+            logger.info("Skipping canceled publication job %s", publication_job_id)
+            return False
         while not await acquire_browser_account_lock(account_id, lock_owner):
             logger.info("Waiting for browser lock for account %s", account_id)
             await asyncio.sleep(3)
@@ -84,6 +90,32 @@ async def process_browser_job(job: dict) -> bool:
         return False
     finally:
         await release_browser_account_lock(account_id, lock_owner)
+
+
+async def _publication_job_active(
+    publication_job_id,
+    user_id: str,
+    task_item_id,
+) -> bool:
+    try:
+        job_uuid = uuid.UUID(str(publication_job_id))
+        owner_uuid = uuid.UUID(str(user_id))
+    except ValueError:
+        return False
+    async with session_context() as session:
+        job = await session.get(PublicationJob, job_uuid)
+        active = (
+            job is not None
+            and job.user_id == owner_uuid
+            and job.status in {"dispatching", "queued", "running"}
+        )
+        if not active and task_item_id:
+            item = await session.get(TaskItem, int(task_item_id))
+            if item and item.status in {TaskItemStatus.PENDING, TaskItemStatus.RUNNING}:
+                item.status = TaskItemStatus.CANCELED
+                item.error = "Publication job was canceled before execution"
+                await session.commit()
+        return active
 
 
 async def _mark_item_running(task_item_id) -> None:

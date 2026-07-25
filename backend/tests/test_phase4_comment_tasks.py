@@ -1,8 +1,15 @@
 from __future__ import annotations
 
-import pytest
+import uuid
+from io import BytesIO
+from types import SimpleNamespace
 
-from app.routers.comment_tasks import _build_task_items
+import pytest
+from fastapi import HTTPException, UploadFile
+from starlette.datastructures import Headers
+
+from app.config import settings
+from app.routers.comment_tasks import _build_task_items, upload_comment_image
 from app.schemas import TaskStartRequest
 from app.worker import process_job
 
@@ -30,6 +37,47 @@ def test_build_task_items_uses_posts_for_new_comment() -> None:
         {"uid": "", "link": "post-1"},
         {"uid": "", "link": "post-2"},
     ]
+
+
+def _upload(filename: str, content_type: str, content: bytes) -> UploadFile:
+    return UploadFile(
+        file=BytesIO(content),
+        filename=filename,
+        headers=Headers({"content-type": content_type}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_upload_comment_image_saves_valid_image(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    user = SimpleNamespace(id=uuid.uuid4())
+
+    result = await upload_comment_image(
+        image=_upload("../../ảnh phòng.png", "image/png", b"\x89PNG\r\n\x1a\npayload"),
+        user=user,
+    )
+
+    saved_path = tmp_path / "comment-tasks" / str(user.id) / result["filename"]
+    assert saved_path.is_file()
+    assert saved_path.read_bytes() == b"\x89PNG\r\n\x1a\npayload"
+    assert result["path"] == str(saved_path)
+    assert result["content_type"] == "image/png"
+    assert ".." not in result["filename"]
+
+
+@pytest.mark.asyncio
+async def test_upload_comment_image_rejects_spoofed_content(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "UPLOAD_DIR", str(tmp_path))
+    user = SimpleNamespace(id=uuid.uuid4())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await upload_comment_image(
+            image=_upload("not-really-an-image.png", "image/png", b"<script>alert(1)</script>"),
+            user=user,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert not list(tmp_path.rglob("*"))
 
 
 class FakeRunner:

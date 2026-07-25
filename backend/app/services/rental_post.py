@@ -1,34 +1,35 @@
-"""RentalPostService — publishes rental rooms to matched Facebook groups
-on a throttled, per-config schedule with retry handling.
-"""
+"""Durable, throttled rental-room publication dispatch and reconciliation."""
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+import uuid
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.models.sqlmodels import (
+    CommentAction,
+    FacebookGroup,
+    PublicationJob,
     RentalConfig,
     RentalRoom,
     TaskRun,
     TaskRunStatus,
-    CommentAction,
-    FacebookGroup,
+)
+from app.services.publication_jobs import (
+    aggregate_rental_room,
+    as_utc,
+    ensure_rental_publication_jobs,
+    reconcile_publication_jobs,
+    schedule_job_retry,
 )
 
 logger = logging.getLogger("flowmeta.rental_post")
-MAX_RETRIES = 3
 
 
 class RentalPostService:
-    """Posts due RentalRoom listings to their matched Facebook groups.
-
-    One call to `post_due` posts at most one remaining Facebook group per
-    eligible RentalConfig (throttled by `post_spacing_seconds`), so repeated
-    scheduler ticks gradually drain the backlog of matched groups per room.
-    """
+    """Claim and dispatch at most one target per eligible rental config."""
 
     def __init__(self, get_session, run_post=None):
         self._get_session = get_session
@@ -40,124 +41,220 @@ class RentalPostService:
         from app.routers.page_tasks import _run_page_post_task
         return _run_page_post_task
 
-    async def post_due(self, now: datetime | None = None) -> list[dict]:
-        now = now or datetime.now(timezone.utc)
-        fired: list[dict] = []
+    async def post_due(
+        self,
+        now: datetime | None = None,
+        *,
+        config_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
+        force: bool = False,
+    ) -> list[dict]:
+        now = as_utc(now) or datetime.now(timezone.utc)
         async with self._get_session() as session:
-            configs = list((await session.execute(select(RentalConfig).where(
+            query = select(RentalConfig.id).where(
                 RentalConfig.auto_post == True,  # noqa: E712
                 RentalConfig.status == "active",
-            ))).scalars())
+            )
+            if config_id is not None:
+                query = query.where(RentalConfig.id == config_id)
+            if user_id is not None:
+                query = query.where(RentalConfig.user_id == user_id)
+            config_ids = list((await session.execute(query)).scalars())
 
-            for cfg in configs:
-                if cfg.last_post_at and (now - cfg.last_post_at) < timedelta(seconds=cfg.post_spacing_seconds):
-                    continue
-
-                room = (await session.execute(select(RentalRoom).where(
-                    RentalRoom.config_id == cfg.id, RentalRoom.status == "new",
-                ).order_by(RentalRoom.created_at).limit(1))).scalar_one_or_none()
-                if room is None:
-                    continue
-
-                group_ids = json.loads(room.matched_group_ids_json or "[]")
-                posted = json.loads(room.post_urls_json or "{}")
-                remaining = [g for g in group_ids if g not in posted]
-
-                if not remaining:
-                    room.status = "posted"
-                    room.posted_at = now
-                    await session.commit()
-                    continue
-
-                # Resolve remaining fbids to FacebookGroup rows, skipping any
-                # that don't resolve, until we find one we can actually post.
-                fbid = None
-                row = None
-                for candidate in remaining:
-                    candidate_row = (await session.execute(select(FacebookGroup).where(
-                        FacebookGroup.user_id == cfg.user_id,
-                        FacebookGroup.group_id == candidate,
-                    ))).scalar_one_or_none()
-                    if candidate_row is None:
-                        logger.warning(
-                            "rental room %s: facebook group_id %s not found for user %s, skipping",
-                            room.id, candidate, cfg.user_id,
-                        )
-                        continue
-                    fbid = candidate
-                    row = candidate_row
-                    break
-
-                if row is None:
-                    # None of the remaining fbids resolved to a group row.
-                    # This is NOT success — leave the room out of "posted" so
-                    # it doesn't silently vanish from the queue with 0 posts.
-                    room.status = "waiting_groups"
-                    room.error = f"no matching facebook groups resolved for {remaining}"
-                    cfg.last_post_at = now
-                    await session.commit()
-                    fired.append({
-                        "config_id": str(cfg.id), "room_id": str(room.id),
-                        "group_id": None, "status": room.status, "skipped": True,
-                    })
-                    continue
-
-                run = TaskRun(
-                    user_id=cfg.user_id,
-                    status=TaskRunStatus.RUNNING,
-                    action=CommentAction.POST_PAGE,
-                    max_threads=1,
-                    text_input_enc=None,
-                    image_path=None,
-                )
-                session.add(run)
-                await session.flush()
-
-                try:
-                    await self._runner()(
-                        run_id=str(run.id),
-                        page_ids=[],
-                        group_ids=[str(row.id)],
-                        personal_account_ids=[],
-                        message=room.caption,
-                        link=None,
-                        media_paths=[],
-                    )
-                    posted[fbid] = str(run.id)
-                    room.post_urls_json = json.dumps(posted)
-                    still_remaining = [g for g in group_ids if g not in posted]
-                    if not still_remaining:
-                        room.status = "posted"
-                        room.posted_at = now
-                    else:
-                        room.status = "new"
-                    room.error = None
-                except Exception as exc:  # noqa: BLE001 - persist failure onto room
-                    room.retry_count += 1
-                    room.status = "error" if room.retry_count >= MAX_RETRIES else "new"
-                    room.error = str(exc)
-                    logger.warning("post room %s failed: %s", room.id, exc)
-
-                cfg.last_post_at = now
-                await session.commit()
-                fired.append({
-                    "config_id": str(cfg.id), "room_id": str(room.id),
-                    "group_id": fbid, "status": room.status,
-                })
-
+        fired: list[dict] = []
+        for candidate_id in config_ids:
+            result = await self._dispatch_for_config(candidate_id, now, force=force)
+            if result:
+                fired.append(result)
         return fired
+
+    async def _dispatch_for_config(
+        self,
+        config_id: uuid.UUID,
+        now: datetime,
+        *,
+        force: bool,
+    ) -> dict | None:
+        async with self._get_session() as session:
+            cfg = await session.get(RentalConfig, config_id)
+            if cfg is None or not cfg.auto_post or cfg.status != "active":
+                return None
+            last_post_at = as_utc(cfg.last_post_at)
+            if (
+                not force
+                and last_post_at
+                and (now - last_post_at) < timedelta(seconds=cfg.post_spacing_seconds)
+            ):
+                return None
+
+            room = (await session.execute(
+                select(RentalRoom).where(
+                    RentalRoom.config_id == cfg.id,
+                    RentalRoom.status.in_(["new", "posting", "partial"]),
+                ).order_by(RentalRoom.created_at).limit(1)
+            )).scalar_one_or_none()
+            if room is not None:
+                base_time = as_utc(room.created_at) or now
+                await ensure_rental_publication_jobs(
+                    session,
+                    room,
+                    scheduled_at=base_time + timedelta(seconds=cfg.post_delay_seconds),
+                )
+                has_jobs = (await session.execute(
+                    select(PublicationJob.id).where(
+                        PublicationJob.rental_room_id == room.id
+                    ).limit(1)
+                )).scalar_one_or_none()
+                if has_jobs is None and room.matched_group_ids_json:
+                    unresolved = [
+                        str(value)
+                        for value in json.loads(room.matched_group_ids_json or "[]")
+                        if str(value)
+                    ]
+                    if unresolved:
+                        room.status = "waiting_groups"
+                        room.error = f"No owned Facebook groups resolved for {unresolved}"
+                        await session.commit()
+                        return {
+                            "config_id": str(cfg.id),
+                            "room_id": str(room.id),
+                            "group_id": None,
+                            "job_id": None,
+                            "status": room.status,
+                            "accepted": False,
+                        }
+
+            job = (await session.execute(
+                select(PublicationJob)
+                .join(RentalRoom, RentalRoom.id == PublicationJob.rental_room_id)
+                .where(
+                    RentalRoom.config_id == cfg.id,
+                    RentalRoom.status.not_in(["rented", "inactive", "skipped"]),
+                    PublicationJob.status == "pending",
+                    PublicationJob.scheduled_at <= now,
+                    or_(
+                        PublicationJob.next_retry_at.is_(None),
+                        PublicationJob.next_retry_at <= now,
+                    ),
+                )
+                .order_by(PublicationJob.scheduled_at, PublicationJob.created_at)
+                .limit(1)
+                .with_for_update(skip_locked=True)
+            )).scalar_one_or_none()
+            if job is None:
+                await session.commit()
+                return None
+
+            room = await session.get(RentalRoom, job.rental_room_id)
+            group = await session.get(FacebookGroup, job.target_id)
+            if (
+                room is None
+                or group is None
+                or group.user_id != cfg.user_id
+                or group.status != "available"
+            ):
+                job.attempt_count += 1
+                schedule_job_retry(job, "Facebook group is missing or unavailable", now)
+                if room is not None:
+                    await aggregate_rental_room(session, room.id, now)
+                await session.commit()
+                return {
+                    "config_id": str(cfg.id),
+                    "room_id": str(job.rental_room_id) if job.rental_room_id else None,
+                    "group_id": job.target_external_id,
+                    "job_id": str(job.id),
+                    "status": job.status,
+                    "accepted": False,
+                }
+
+            run = TaskRun(
+                user_id=cfg.user_id,
+                status=TaskRunStatus.RUNNING,
+                action=CommentAction.POST_PAGE,
+                max_threads=1,
+                text_input_enc=None,
+                image_path=None,
+            )
+            session.add(run)
+            await session.flush()
+            job.status = "dispatching"
+            job.claimed_at = now
+            job.started_at = now
+            job.attempt_count += 1
+            job.task_run_id = run.id
+            job.error = None
+            room.status = "posting"
+            room.error = None
+            cfg.last_post_at = now
+            dispatch = {
+                "job_id": job.id,
+                "run_id": run.id,
+                "room_id": room.id,
+                "config_id": cfg.id,
+                "group_id": group.id,
+                "group_external_id": group.group_id,
+                "message": room.caption,
+                "media_paths": [
+                    str(path)
+                    for path in json.loads(room.media_paths_json or "[]")
+                    if str(path)
+                ],
+            }
+            await session.commit()
+
+        try:
+            result = await self._runner()(
+                run_id=str(dispatch["run_id"]),
+                page_ids=[],
+                group_ids=[str(dispatch["group_id"])],
+                personal_account_ids=[],
+                message=dispatch["message"],
+                link=None,
+                media_paths=dispatch["media_paths"],
+                publication_job_id=str(dispatch["job_id"]),
+            )
+        except Exception as exc:  # noqa: BLE001 - persist dispatch failure
+            logger.warning("dispatch publication job %s failed: %s", dispatch["job_id"], exc)
+            result = {"accepted": False, "error": str(exc), "task_item_ids": []}
+
+        async with self._get_session() as session:
+            job = await session.get(PublicationJob, dispatch["job_id"])
+            if job is None:
+                return None
+            item_ids = list((result or {}).get("task_item_ids") or [])
+            accepted = bool((result or {}).get("accepted")) and bool(item_ids)
+            if accepted:
+                job.status = "queued"
+                job.task_item_id = int(item_ids[0])
+                job.error = None
+            else:
+                schedule_job_retry(
+                    job,
+                    str((result or {}).get("error") or "Publisher did not accept the job"),
+                    now,
+                )
+            if job.rental_room_id:
+                await aggregate_rental_room(session, job.rental_room_id, now)
+            await session.commit()
+            return {
+                "config_id": str(dispatch["config_id"]),
+                "room_id": str(dispatch["room_id"]),
+                "group_id": dispatch["group_external_id"],
+                "job_id": str(job.id),
+                "run_id": str(dispatch["run_id"]),
+                "task_item_id": job.task_item_id,
+                "status": job.status,
+                "accepted": accepted,
+            }
 
 
 async def run_rental_posting(get_session=None) -> None:
-    """Post one throttled batch of due rental rooms.
-
-    `get_session` is injectable so tests can pass the shared SQLite test
-    session instead of the production Postgres `session_context`.
-    """
+    """Reconcile completed posts, then dispatch one due target per config."""
     if get_session is None:
         from app.db.postgres import session_context
         get_session = session_context
     try:
+        await reconcile_publication_jobs(get_session)
         await RentalPostService(get_session).post_due()
     except Exception:
         logger.exception("rental posting failed")

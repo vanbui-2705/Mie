@@ -43,8 +43,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmeta}:${POSTGRES_PASSWORD:-flowmeta}@postgres:5432/${POSTGRES_DB:-flowmeta}
       REDIS_URL: redis://redis:6379/0
-      FERNET_KEY: ${FERNET_KEY:-3ZcWeflwVSVVjCXKbRquP8EDZzaGyHNKsT2fSaGYNK8=}
-      FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:-change-me-to-long-random-secret}
+      FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env}
+      FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:?Set FLOWMETA_TOKEN_SECRET in .env}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       META_APP_ID: ${META_APP_ID:-}
       META_APP_SECRET: ${META_APP_SECRET:-}
@@ -64,6 +64,9 @@ services:
       EXPOSE_PASSWORD_RESET_TOKEN: ${EXPOSE_PASSWORD_RESET_TOKEN:-false}
       BROWSER_PROFILE_DIR: ${BROWSER_PROFILE_DIR:-/app/browser-profiles}
       UPLOAD_DIR: ${UPLOAD_DIR:-/app/uploads}
+      COMMENT_IMAGE_MAX_BYTES: ${COMMENT_IMAGE_MAX_BYTES:-10485760}
+      SCHEDULER_ENABLED: ${SCHEDULER_ENABLED:-true}
+      SCHEDULER_INTERVAL_SECONDS: ${SCHEDULER_INTERVAL_SECONDS:-60}
       BROWSER_PROVIDER: ${BROWSER_PROVIDER:-kasm}
       BROWSERLESS_WS_URL: ${BROWSERLESS_WS_URL:-ws://browserless:3000/chromium}
       BROWSER_SESSION_TTL_SECONDS: ${BROWSER_SESSION_TTL_SECONDS:-1800}
@@ -75,7 +78,7 @@ services:
       KASM_BROWSER_PROFILES_VOLUME: ${KASM_BROWSER_PROFILES_VOLUME:-comment_edit_delete_browser-profiles}
       KASM_PUBLIC_SCHEME: ${KASM_PUBLIC_SCHEME:-https}
       KASM_PUBLIC_HOST: ${KASM_PUBLIC_HOST:-localhost}
-      KASM_VNC_PASSWORD: ${KASM_VNC_PASSWORD:-flowmeta-session}
+      KASM_VNC_PASSWORD: ${KASM_VNC_PASSWORD:?Set KASM_VNC_PASSWORD in .env}
       KASM_EMBED_CREDENTIALS_IN_URL: ${KASM_EMBED_CREDENTIALS_IN_URL:-true}
       REMOTE_BROWSER_BASE_URL: ${REMOTE_BROWSER_BASE_URL:-http://localhost:${REMOTE_BROWSER_PORT:-3010}}
       REMOTE_BROWSER_URL_TEMPLATE: ${REMOTE_BROWSER_URL_TEMPLATE:-}
@@ -107,8 +110,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmeta}:${POSTGRES_PASSWORD:-flowmeta}@postgres:5432/${POSTGRES_DB:-flowmeta}
       REDIS_URL: redis://redis:6379/0
-      FERNET_KEY: ${FERNET_KEY:-3ZcWeflwVSVVjCXKbRquP8EDZzaGyHNKsT2fSaGYNK8=}
-      FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:-change-me-to-long-random-secret}
+      FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env}
+      FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:?Set FLOWMETA_TOKEN_SECRET in .env}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -128,8 +131,8 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmeta}:${POSTGRES_PASSWORD:-flowmeta}@postgres:5432/${POSTGRES_DB:-flowmeta}
       REDIS_URL: redis://redis:6379/0
-      FERNET_KEY: ${FERNET_KEY:-3ZcWeflwVSVVjCXKbRquP8EDZzaGyHNKsT2fSaGYNK8=}
-      FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:-change-me-to-long-random-secret}
+      FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env}
+      FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:?Set FLOWMETA_TOKEN_SECRET in .env}
       BROWSER_PROFILE_DIR: ${BROWSER_PROFILE_DIR:-/app/browser-profiles}
       UPLOAD_DIR: ${UPLOAD_DIR:-/app/uploads}
       BROWSER_WORKER_CONCURRENCY: ${BROWSER_WORKER_CONCURRENCY:-1}
@@ -183,9 +186,9 @@ services:
     build:
       context: ./frontend
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_API_URL: ${LOCAL_NEXT_PUBLIC_API_URL:-http://localhost:${BACKEND_PORT:-8000}}
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_API_URL: ${LOCAL_NEXT_PUBLIC_API_URL:-http://localhost:${BACKEND_PORT:-8000}}
     depends_on:
       - backend
     ports:

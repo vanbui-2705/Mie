@@ -40,15 +40,15 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
         async with engine.begin() as conn:
             from app.models.sqlmodels import (
         OAuthAccount, PasswordResetToken, Permission, Role, RolePermission,
-                GoogleSheetConnection, ScheduledPost, TaskRun, TaskItem, TaskLog, UserRole,
+                GoogleSheetConnection, SheetCampaign, SheetSourceItem, ScheduledPost, TaskRun, TaskItem, TaskLog, UserRole,
         FacebookAccount, FacebookGroup, ExternalPage, FacebookPage,
-                RentalConfig, RentalRoom,
+                RentalConfig, RentalRoom, PublicationJob, RentalSheetMirrorJob, SheetWritebackJob,
             )
             for tbl in (
         User, Role, Permission, RolePermission, UserRole,
-                GoogleSheetConnection, ScheduledPost, TaskRun, TaskItem, TaskLog, OAuthAccount, PasswordResetToken,
-        FacebookAccount, FacebookGroup, ExternalPage, FacebookPage,
-                RentalConfig, RentalRoom,
+                GoogleSheetConnection, SheetCampaign, SheetSourceItem, ScheduledPost, TaskRun, TaskItem, TaskLog, OAuthAccount, PasswordResetToken,
+                FacebookAccount, FacebookGroup, ExternalPage, FacebookPage,
+                RentalConfig, RentalRoom, PublicationJob, RentalSheetMirrorJob, SheetWritebackJob,
             ):
                 await conn.run_sync(tbl.__table__.create, checkfirst=True)
 

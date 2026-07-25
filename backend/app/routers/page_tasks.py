@@ -578,7 +578,9 @@ async def _run_page_post_task(
     message: str,
     link: str | None,
     media_paths: list[str],
-) -> None:
+    publication_job_id: str | None = None,
+) -> dict:
+    task_item_ids: list[int] = []
     try:
         failures = 0
         async with session_context() as session:
@@ -598,6 +600,7 @@ async def _run_page_post_task(
                 )
                 session.add(item)
                 await session.flush()
+                task_item_ids.append(int(item.id))
                 token = decrypt(page.page_access_token_enc)
                 result = await post_page_media(page.page_id, token, message, media_paths, link) if media_paths else await post_page_feed(page.page_id, token, message, link)
                 if not result.get("success") and _is_token_expired_error(str(result.get("message") or "")):
@@ -628,6 +631,7 @@ async def _run_page_post_task(
                 )
                 session.add(item)
                 await session.flush()
+                task_item_ids.append(int(item.id))
                 if group.status != "available":
                     failures += 1
                     item.status = TaskItemStatus.FAILED
@@ -651,6 +655,7 @@ async def _run_page_post_task(
                     "media_paths": media_paths,
                     "media_urls": _media_urls(media_paths),
                     "action": "post_group",
+                    "publication_job_id": publication_job_id,
                 }
                 if await is_extension_online(str(group.facebook_account_id)):
                     await enqueue_extension_job(str(group.facebook_account_id), payload)
@@ -671,6 +676,7 @@ async def _run_page_post_task(
                 )
                 session.add(item)
                 await session.flush()
+                task_item_ids.append(int(item.id))
                 extension_online = await is_extension_online(str(account.id))
                 if not extension_online and account.browser_status != "logged_in":
                     failures += 1
@@ -699,6 +705,7 @@ async def _run_page_post_task(
                     "media_urls": _media_urls(media_paths),
                     "target_url": "https://www.facebook.com/me",
                     "action": "post_personal",
+                    "publication_job_id": publication_job_id,
                 }
                 if extension_online:
                     await enqueue_extension_job(str(account.id), payload)
@@ -706,8 +713,17 @@ async def _run_page_post_task(
                     await enqueue_browser_job(payload)
             if queued_browser == 0:
                 await _finish(session, run_id, failed=failures > 0)
+            return {
+                "accepted": bool(task_item_ids),
+                "task_run_id": run_id,
+                "task_item_ids": task_item_ids,
+                "queued_count": queued_browser,
+                "failure_count": failures,
+                "status": "queued" if queued_browser else "completed",
+            }
     except Exception as exc:
         await _fail(run_id, str(exc))
+        raise
 
 
 async def _run_share_task(run_id: str, share_target_ids: list[str], message: str, source_url: str) -> None:

@@ -3,6 +3,20 @@ bin/
 obj/
 build-check*/
 publish/
+.next/
+node_modules/
+coverage/
+htmlcov/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.venv/
+venv/
 
 # Visual Studio / Rider
 .vs/

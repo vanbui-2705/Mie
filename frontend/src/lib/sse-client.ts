@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { LogEntry, TaskStats } from "@/types";
-import { API_BASE, getAuthToken } from "./api-client";
+import { getApiBase, getAuthToken } from "./api-client";
 
 export function useSSE<T>(
 url: string,
@@ -94,7 +94,7 @@ return useSSE<TaskStats>(`${base}/api/events/stream?channels=log,stats`, { recon
 }
 
 export function useHealthCheck(options?: { interval?: number; urlBase?: string }) {
-const base = (options?.urlBase ?? API_BASE).replace(/\/$/, "");
+const base = (options?.urlBase ?? getApiBase()).replace(/\/$/, "");
 const interval = options?.interval ?? 30000;
 const [status, setStatus] = useState<"checking" | "online" | "offline">("checking");
 const abortRef = useRef<AbortController | null>(null);

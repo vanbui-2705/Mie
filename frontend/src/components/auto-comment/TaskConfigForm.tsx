@@ -6,8 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { SectionEyebrow } from "@/components/shared/SectionEyebrow";
-import { Play, Square } from "lucide-react";
+import { ImagePlus, LoaderCircle, Play, Square } from "lucide-react";
 import type { TaskConfig } from "@/types";
+import { apiPost } from "@/lib/api-client";
+import { toast } from "sonner";
 
 type TaskConfigFormProps = {
   onStart: (config: TaskConfig) => void;
@@ -29,19 +31,66 @@ const INITIAL: TaskConfig = {
 
 export function TaskConfigForm({ onStart, onStop, running }: TaskConfigFormProps) {
   const [cfg, setCfg] = useState<TaskConfig>(INITIAL);
+  const [uploading, setUploading] = useState(false);
 
   const update = (patch: Partial<TaskConfig>) => {
     setCfg((p) => ({ ...p, ...patch }));
   };
 
   const handleStart = () => {
+    const links = cfg.links.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const uids = cfg.uids.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (links.length === 0) {
+      toast.error(cfg.action === "new_comment" ? "Hãy nhập ít nhất một link bài viết" : "Hãy nhập ít nhất một link comment");
+      return;
+    }
+    if (cfg.action !== "new_comment" && (uids.length === 0 || uids.length !== links.length)) {
+      toast.error("Số dòng UID phải bằng số dòng link comment");
+      return;
+    }
+    if (cfg.action !== "delete" && !cfg.content.trim() && !cfg.imagePath.trim()) {
+      toast.error("Hãy nhập nội dung hoặc chọn một ảnh");
+      return;
+    }
     onStart(cfg);
+  };
+
+  const uploadImage = async (file: File | undefined) => {
+    if (!file) return;
+    const formData = new FormData();
+    formData.append("image", file);
+    setUploading(true);
+    try {
+      const result = await apiPost<{ path: string; filename: string }>("/api/comment-tasks/upload", formData);
+      update({ imagePath: result.path });
+      toast.success(`Đã tải ảnh ${result.filename}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Không tải được ảnh");
+    } finally {
+      setUploading(false);
+    }
   };
 
   return (
     <div className="space-y-5">
       <SectionEyebrow label="Cấu hình luồng" />
       <div className="flex flex-wrap items-end gap-3">
+        <div className="flex min-w-[190px] flex-col gap-1">
+          <Label className="text-[9pt] font-medium" style={{ color: "var(--muted-foreground)" }}>
+            Hành động
+          </Label>
+          <select
+            className="h-8 rounded-md border bg-transparent px-2 text-[9pt]"
+            style={{ borderColor: "var(--border)" }}
+            value={cfg.action}
+            onChange={(event) => update({ action: event.target.value as TaskConfig["action"] })}
+            disabled={running}
+          >
+            <option value="edit">Chỉnh sửa comment</option>
+            <option value="delete">Xóa comment</option>
+            <option value="new_comment">Tạo comment mới</option>
+          </select>
+        </div>
         <div className="flex flex-col gap-1" style={{ maxWidth: 200 }}>
           <Label className="text-[9pt] font-medium" style={{ color: "var(--muted-foreground)" }}>
             Số luồng
@@ -61,23 +110,27 @@ export function TaskConfigForm({ onStart, onStop, running }: TaskConfigFormProps
         </div>
       </div>
 
-      <SectionEyebrow label="UID Profile & Link bài viết" />
-      <div className="grid gap-3 md:grid-cols-2">
+      <SectionEyebrow label={cfg.action === "new_comment" ? "Danh sách bài viết" : "UID Profile & Link comment"} />
+      <div className={`grid gap-3 ${cfg.action === "new_comment" ? "" : "md:grid-cols-2"}`}>
+        {cfg.action !== "new_comment" && (
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-[9pt] font-medium" style={{ color: "var(--muted-foreground)" }}>
+              UID Profile
+            </Label>
+            <Textarea value={cfg.uids} onChange={(e) => update({ uids: e.target.value })} placeholder="Mỗi dòng 1 UID, khớp với từng link" rows={3} className="text-[9pt]" disabled={running} />
+          </div>
+        )}
         <div className="flex flex-col gap-1.5">
           <Label className="text-[9pt] font-medium" style={{ color: "var(--muted-foreground)" }}>
-            UID Profile (để trống = tự động kiểm tra)
-          </Label>
-          <Textarea value={cfg.uids} onChange={(e) => update({ uids: e.target.value })} placeholder="Mỗi dòng 1 UID" rows={3} className="text-[9pt]" disabled={running} />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label className="text-[9pt] font-medium" style={{ color: "var(--muted-foreground)" }}>
-            Link bài viết
+            {cfg.action === "new_comment" ? "Link bài viết" : "Link comment"}
           </Label>
           <Textarea value={cfg.links} onChange={(e) => update({ links: e.target.value })} placeholder="Mỗi dòng 1 link" rows={3} className="text-[9pt]" disabled={running} />
         </div>
       </div>
 
-      <SectionEyebrow label="Nội dung comment" />
+      {cfg.action !== "delete" && (
+        <>
+      <SectionEyebrow label={cfg.action === "edit" ? "Nội dung comment mới" : "Nội dung comment"} />
       <div className="flex flex-col gap-3">
         <div className="flex flex-col gap-1.5">
           <Label className="text-[9pt] font-medium" style={{ color: "var(--muted-foreground)" }}>
@@ -90,11 +143,26 @@ export function TaskConfigForm({ onStart, onStop, running }: TaskConfigFormProps
             Đường dẫn ảnh (tùy chọn)
           </Label>
           <div className="flex flex-wrap gap-2">
-            <Input value={cfg.imagePath} onChange={(e) => update({ imagePath: e.target.value })} placeholder="/path/to/images/" className="h-8 min-w-[220px] flex-1 text-[9pt]" disabled={running} />
-            <Button type="button" variant="outline" className="h-8 px-3 text-[9pt] shrink-0" disabled={running}>Chọn thư mục</Button>
+            <Input value={cfg.imagePath} onChange={(e) => update({ imagePath: e.target.value })} placeholder="Đường dẫn ảnh trên server hoặc tải tệp" className="h-8 min-w-[220px] flex-1 text-[9pt]" disabled={running || uploading} />
+            <label className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-3 text-[9pt] transition hover:bg-muted">
+              {uploading ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ImagePlus className="h-3.5 w-3.5" />}
+              {uploading ? "Đang tải..." : "Chọn ảnh"}
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                className="hidden"
+                disabled={running || uploading}
+                onChange={(event) => {
+                  void uploadImage(event.target.files?.[0]);
+                  event.target.value = "";
+                }}
+              />
+            </label>
           </div>
         </div>
       </div>
+        </>
+      )}
 
       <SectionEyebrow label="Delay giữa các vòng" />
       <div className="flex flex-wrap items-center gap-3 text-[9pt]" style={{ color: "var(--muted-foreground)" }}>

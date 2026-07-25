@@ -14,6 +14,8 @@ const sectionLabels: Record<string, string> = {
   "/auto-share": "Auto Share Facebook",
   "/scheduled-posts": "Lịch đăng bài",
   "/google-sheets": "Nguồn Google Sheets",
+  "/sheet-campaigns": "Chiến dịch Google Sheets",
+  "/tro": "Đăng trọ tự động",
   "/proxy": "Quản lý Proxy",
   "/users": "Quản lý người dùng",
   "/settings": "Cài đặt",
