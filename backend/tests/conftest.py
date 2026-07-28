@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import String, Text
+from sqlalchemy import JSON, String
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -34,7 +34,9 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
                 col.type = String()
             elif isinstance(col.type, JSONB):
                 original_types.append((col, col.type))
-                col.type = Text()
+                # Generic JSON, not Text: SQLite's driver cannot bind a raw dict,
+                # and JSONB columns (e.g. clip_jobs.params) hold dicts.
+                col.type = JSON()
 
     try:
         async with engine.begin() as conn:
@@ -44,11 +46,13 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
         FacebookAccount, FacebookGroup, ExternalPage, FacebookPage,
                 RentalConfig, RentalRoom, PublicationJob, RentalSheetMirrorJob, SheetWritebackJob,
             )
+            from app.models.clip_models import ClipJob, Clip, ClipEdit
             for tbl in (
         User, Role, Permission, RolePermission, UserRole,
                 GoogleSheetConnection, SheetCampaign, SheetSourceItem, ScheduledPost, TaskRun, TaskItem, TaskLog, OAuthAccount, PasswordResetToken,
                 FacebookAccount, FacebookGroup, ExternalPage, FacebookPage,
                 RentalConfig, RentalRoom, PublicationJob, RentalSheetMirrorJob, SheetWritebackJob,
+                ClipJob, Clip, ClipEdit,
             ):
                 await conn.run_sync(tbl.__table__.create, checkfirst=True)
 

@@ -1,0 +1,150 @@
+"""Flow Studio clip models.
+
+Separate module file (Goodman-style): own process/queue at runtime, but shares
+the SAME SQLAlchemy Base, migration chain, and PostgreSQL as the Face module.
+Do not merge these into sqlmodels.py.
+"""
+from __future__ import annotations
+
+import uuid
+from dataclasses import field
+from datetime import datetime
+from enum import Enum as PyEnum
+from typing import Optional
+
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    Text,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy.orm import Mapped, MappedAsDataclass, mapped_column, relationship
+
+from app.models.sqlmodels import Base
+
+
+class ClipSourceType(str, PyEnum):
+    UPLOAD = "upload"
+    LINK = "link"
+
+
+class ClipJobStatus(str, PyEnum):
+    QUEUED = "queued"
+    ANALYZING = "analyzing"
+    SCORING = "scoring"
+    RENDERING = "rendering"
+    DONE = "done"
+    ERROR = "error"
+
+
+class ClipStatus(str, PyEnum):
+    PENDING = "pending"
+    RENDERING = "rendering"
+    READY = "ready"
+    ERROR = "error"
+
+
+class ClipEditSource(str, PyEnum):
+    AUTO = "auto"
+    OPENCUT = "opencut"
+
+
+class ClipJob(MappedAsDataclass, Base):
+    __tablename__ = "clip_jobs"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    source_type: Mapped[ClipSourceType] = mapped_column(
+        Enum(ClipSourceType, name="clip_source_type", native_enum=False), nullable=False,
+    )
+    source_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True,
+        default_factory=uuid.uuid4, server_default=func.gen_random_uuid(),
+    )
+    status: Mapped[ClipJobStatus] = mapped_column(
+        Enum(ClipJobStatus, name="clip_job_status", native_enum=False),
+        nullable=False, default=ClipJobStatus.QUEUED,
+    )
+    params: Mapped[dict] = mapped_column(JSONB, nullable=False, default_factory=dict)
+    source_sha256: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), init=False,
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+
+    clips: Mapped[list["Clip"]] = relationship(
+        "Clip", back_populates="job",
+        cascade="all, delete-orphan", order_by="Clip.rank",
+        default_factory=list,
+    )
+
+    __table_args__ = (
+        Index("idx_clip_jobs_user_created_at", user_id, created_at.desc()),
+    )
+
+
+class Clip(Base):
+    __tablename__ = "clips"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True,
+        default=uuid.uuid4, server_default=func.gen_random_uuid(),
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("clip_jobs.id", ondelete="CASCADE"), nullable=False,
+    )
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, default=None)
+    hook_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    start_sec: Mapped[float] = mapped_column(Float, nullable=False)
+    end_sec: Mapped[float] = mapped_column(Float, nullable=False)
+    clipspec: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    output_ref: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    status: Mapped[ClipStatus] = mapped_column(
+        Enum(ClipStatus, name="clip_status", native_enum=False),
+        nullable=False, default=ClipStatus.PENDING,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+    job: Mapped["ClipJob"] = relationship("ClipJob", back_populates="clips")
+
+    __table_args__ = (
+        Index("idx_clips_job_rank", job_id, rank),
+    )
+
+
+class ClipEdit(Base):
+    __tablename__ = "clip_edits"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True,
+        default=uuid.uuid4, server_default=func.gen_random_uuid(),
+    )
+    clip_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("clips.id", ondelete="CASCADE"), nullable=False,
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    clipspec: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    source: Mapped[ClipEditSource] = mapped_column(
+        Enum(ClipEditSource, name="clip_edit_source", native_enum=False),
+        nullable=False, default=ClipEditSource.AUTO,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("idx_clip_edits_clip_version", clip_id, version),
+    )
