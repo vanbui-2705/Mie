@@ -44,10 +44,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("eval")
 
 
-def hot_region_recall(regions, expected: list[dict]) -> float:
-    """Fraction of hand-labelled highlights that a hot region overlaps at all."""
+def hot_region_recall(regions, expected: list[dict]) -> float | None:
+    """Fraction of hand-labelled highlights that a hot region overlaps at all.
+
+    `None`, not NaN, when there is nothing to measure: json.dumps emits a bare
+    `NaN` token that strict JSON parsers reject, and summary.json is meant to be
+    machine-readable.
+    """
     if not expected:
-        return float("nan")
+        return None
     hits = 0
     for item in expected:
         lo, hi = float(item["start_sec"]), float(item["end_sec"])
@@ -56,11 +61,11 @@ def hot_region_recall(regions, expected: list[dict]) -> float:
     return hits / len(expected)
 
 
-def mid_word_cut_rate(cuts: list[tuple[float, float]], words) -> float:
+def mid_word_cut_rate(cuts: list[tuple[float, float]], words) -> float | None:
     """Fraction of cut boundaries that land strictly inside a spoken word."""
     boundaries = [t for cut in cuts for t in cut]
     if not boundaries:
-        return float("nan")
+        return None
     bad = sum(1 for t in boundaries if any(w.start < t < w.end for w in words))
     return bad / len(boundaries)
 
