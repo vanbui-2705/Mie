@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.config import settings
+
 
 # ─── Profile ──────────────────────────────────────────────────────────────────
 
@@ -264,3 +266,30 @@ class HealthResponse(BaseModel):
     postgres: str = "unknown"
     redis: str = "unknown"
     app: str = "running"
+
+
+class ClipJobCreate(BaseModel):
+    source_link: str | None = None
+    top_n: int = 10
+    clip_min_sec: int = 120
+    clip_max_sec: int = 300
+    scoring_backend: str = settings.SCORING_BACKEND
+
+
+class ClipOut(BaseModel):
+    id: str
+    rank: int
+    score: int | None = None
+    hook_text: str | None = None
+    start_sec: float
+    end_sec: float
+    status: str
+    output_ref: str | None = None
+
+
+class ClipJobOut(BaseModel):
+    id: str
+    source_type: str
+    status: str
+    error: str | None = None
+    clips: list[ClipOut] = []
