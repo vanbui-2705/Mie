@@ -15,3 +15,8 @@ pytest==8.2.2
 pytest-asyncio==0.23.7
 playwright==1.49.1
 docker==7.1.0
+numpy==1.26.4
+faster-whisper==1.0.3
+opencv-python-headless==4.10.0.84
+yt-dlp>=2024.12.13
+anthropic>=0.69.0

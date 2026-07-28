@@ -60,10 +60,45 @@ class Settings(BaseSettings):
     PASSWORD_RESET_URL: str = "http://localhost:3000/reset-password"
     EXPOSE_PASSWORD_RESET_TOKEN: bool = False
 
+    # AI APIs
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-1.5-flash"
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "llama3"
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-opus-5"
+    LLM_TIMEOUT_SECONDS: float = 120.0
+
     # Browser worker / personal profile posting
     BROWSER_PROFILE_DIR: str = "/app/browser-profiles"
     UPLOAD_DIR: str = "/app/uploads"
     COMMENT_IMAGE_MAX_BYTES: int = 10 * 1024 * 1024
+
+    # Flow Studio (clip module)
+    CLIP_UPLOAD_DIR: str = "/app/uploads/clips"
+    CLIP_MAX_UPLOAD_BYTES: int = 4 * 1024 * 1024 * 1024  # 4 GB
+    FLOW_PORT: int = 8001
+
+    # Flow Studio AI pipeline
+    ASR_BACKEND: str = "local"          # local | cloud
+    ASR_WHISPER_MODEL: str = "medium"   # faster-whisper model size or local path
+    ASR_COMPUTE_TYPE: str = "int8"
+    ASR_CPU_THREADS: int = 4
+    SCORING_BACKEND: str = "gemini"     # gemini | ollama | claude | heuristic
+    CLIP_PREFILTER_MAX_REGIONS: int = 30
+    CLIP_PREFILTER_MIN_REGION_SEC: float = 20.0
+    CLIP_PREFILTER_MAX_REGION_SEC: float = 90.0
+    CLIP_FONT_DIR: str = "/app/assets/fonts"
+    CLIP_SUBTITLE_FONT: str = "Be Vietnam Pro"
+    CLIP_PIPELINE_VERSION: str = "ai-v1"
+    FFMPEG_BIN: str = "ffmpeg"
+    FFPROBE_BIN: str = "ffprobe"
+    YTDLP_BIN: str = "yt-dlp"
+
+    # Cross-module peer endpoints (used only when the peer is up)
+    FACE_BASE_URL: str = "http://localhost:8000"
+    FLOW_BASE_URL: str = "http://localhost:8001"
+    PEER_HEALTH_TIMEOUT_SECONDS: float = 2.0
     BROWSER_WORKER_CONCURRENCY: int = 1
     BROWSER_PROVIDER: str = "kasm"
     BROWSERLESS_WS_URL: str = ""
