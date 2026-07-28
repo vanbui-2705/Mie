@@ -1,0 +1,12 @@
+{
+  "videos": [
+    {
+      "path": "samples/vi_podcast_01.mp4",
+      "duration_sec": 3600,
+      "expected_highlights": [
+        {"start_sec": 412.0, "end_sec": 455.0, "note": "punchline about lai suat"},
+        {"start_sec": 1890.0, "end_sec": 1935.0, "note": "guest reveals the number"}
+      ]
+    }
+  ]
+}

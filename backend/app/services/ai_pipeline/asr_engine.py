@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
-from typing import Any
 
 import numpy as np
 
@@ -128,17 +127,3 @@ async def transcribe_regions(
     logger.info("ASR produced %d/%d usable regions (language=%s)",
                 len(out), len(targets), detected_language)
     return Transcript(language=detected_language, regions=tuple(out))
-
-
-async def transcribe_audio(audio_path: str) -> dict[str, Any]:
-    """Whole-file transcription in the pre-region dict shape.
-
-    Kept only so the not-yet-rewired `clip_runner` keeps importing; it is
-    deleted when the runner moves to `transcribe_regions`.
-    """
-    transcript = await transcribe_regions(audio_path, [])
-    return {
-        "language": transcript.language,
-        "text": transcript.total_text,
-        "words": [w.to_dict() for w in transcript.all_words],
-    }
