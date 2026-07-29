@@ -1,77 +1,65 @@
 "use client";
 
-import React, { useRef, useState, useEffect } from "react";
+import { useRef, useState } from "react";
+import { clipStreamUrl, type Clip } from "@/lib/flow-api";
 
-export interface WordSpec {
-  start: number;
-  end: number;
-  word: string;
-}
-
-export interface ClipSpec {
-  video_url: string;
-  clip_duration: number;
-  translated_text: string;
-  hook_text: string;
-  original_words: WordSpec[];
-  style: any;
-}
-
-interface ClipPlayerProps {
-  spec: ClipSpec;
-}
-
-export function ClipPlayer({ spec }: ClipPlayerProps) {
+/**
+ * The rendered file already has the ASS subtitles burned in (see
+ * ai_pipeline/renderer.py), so the player must NOT draw them again on top.
+ * The word list below the frame is a transcript, not an overlay: it follows
+ * playback so the editor can see which word is on screen right now.
+ */
+export function ClipPlayer({ clip }: { clip: Clip }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [currentTime, setCurrentTime] = useState(0);
+  const [failed, setFailed] = useState(false);
 
-  const handleTimeUpdate = () => {
-    if (videoRef.current) {
-      setCurrentTime(videoRef.current.currentTime);
-    }
-  };
+  const words = clip.clipspec?.words ?? [];
+
+  if (clip.status !== "READY" || !clip.output_ref) {
+    return (
+      <div className="flex aspect-[9/16] w-full items-center justify-center rounded-lg border border-dashed border-foreground/15 text-xs text-muted-foreground">
+        {clip.status === "ERROR" ? "Render lỗi" : "Chưa render xong"}
+      </div>
+    );
+  }
 
   return (
-    <div className="relative w-full max-w-md mx-auto aspect-[9/16] bg-black rounded-lg overflow-hidden flex items-center justify-center">
-      {/* Video layer */}
-      <video
-        ref={videoRef}
-        src={spec.video_url}
-        controls
-        className="absolute inset-0 w-full h-full object-contain"
-        onTimeUpdate={handleTimeUpdate}
-      />
+    <div className="space-y-3">
+      <div className="relative aspect-[9/16] w-full overflow-hidden rounded-lg bg-black">
+        {failed ? (
+          <div className="flex h-full items-center justify-center px-4 text-center text-xs text-muted-foreground">
+            Không tải được video. Kiểm tra Flow API còn chạy không.
+          </div>
+        ) : (
+          <video
+            ref={videoRef}
+            src={clipStreamUrl(clip.id)}
+            controls
+            preload="metadata"
+            playsInline
+            className="absolute inset-0 h-full w-full object-contain"
+            onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime ?? 0)}
+            onError={() => setFailed(true)}
+          />
+        )}
+      </div>
 
-      {/* Subtitles layer overlay (Karaoke Effect) */}
-      <div className="absolute bottom-20 left-0 right-0 px-4 pointer-events-none">
-        <p className="text-center text-4xl font-black uppercase leading-tight drop-shadow-md" style={{
-          WebkitTextStroke: `1px ${spec.style?.stroke || "#000"}`,
-          textShadow: "2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000"
-        }}>
-          {spec.original_words.map((w, i) => {
-            // Check if this word should be highlighted based on current playback time
-            // We use relative time in the clip (assuming video starts at 0 for this clip)
+      {words.length > 0 && (
+        <p className="max-h-24 overflow-y-auto text-[13px] leading-relaxed">
+          {words.map((w, i) => {
             const isActive = currentTime >= w.start && currentTime <= w.end;
             return (
               <span
-                key={i}
-                className="mr-2 inline-block transition-colors duration-75"
-                style={{
-                  color: isActive ? spec.style?.highlightColor || "#FFD700" : spec.style?.color || "#FFFFFF"
-                }}
+                key={`${i}-${w.start}`}
+                className={isActive ? "font-semibold text-foreground" : "text-muted-foreground"}
               >
-                {w.word}
+                {w.word}{" "}
               </span>
             );
           })}
         </p>
-        {/* Optional: Show Vietnamese translation below */}
-        {spec.translated_text && (
-          <p className="text-center text-xl mt-4 text-white font-bold drop-shadow-md bg-black/50 inline-block px-2 rounded">
-            {spec.translated_text}
-          </p>
-        )}
-      </div>
+      )}
     </div>
   );
 }

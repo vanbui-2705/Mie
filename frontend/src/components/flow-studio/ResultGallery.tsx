@@ -1,55 +1,50 @@
 "use client";
 
-import React from "react";
-import { ClipPlayer, ClipSpec } from "./ClipPlayer";
-import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
-import { Badge } from "../ui/badge";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ClipPlayer } from "./ClipPlayer";
+import { clipDownloadUrl, type Clip } from "@/lib/flow-api";
+import { Download } from "lucide-react";
 
-export interface ClipData {
-  id: string;
-  rank: number;
-  score: number;
-  hook_text: string;
-  clipspec: ClipSpec;
+function seconds(value: number) {
+  const total = Math.max(0, Math.round(value));
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
-interface ResultGalleryProps {
-  clips: ClipData[];
-}
-
-export function ResultGallery({ clips }: ResultGalleryProps) {
-  if (!clips || clips.length === 0) {
-    return null;
-  }
-
-  // Sort by rank (1 is best)
-  const sortedClips = [...clips].sort((a, b) => a.rank - b.rank);
+export function ResultGallery({ clips }: { clips: Clip[] }) {
+  if (clips.length === 0) return null;
+  const sorted = [...clips].sort((a, b) => a.rank - b.rank);
 
   return (
-    <div className="mt-8 space-y-6">
-      <h3 className="text-2xl font-bold">🎉 Clips Đã Hoàn Thành</h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-        {sortedClips.map((clip) => (
-          <Card key={clip.id} className="overflow-hidden flex flex-col bg-slate-900 border-slate-800 text-white">
-            <CardHeader className="p-4 pb-2">
-              <div className="flex justify-between items-start mb-2">
-                <Badge variant={clip.rank === 1 ? "default" : "secondary"} className={clip.rank === 1 ? "bg-amber-500 hover:bg-amber-600" : ""}>
-                  Top {clip.rank}
-                </Badge>
-                <Badge variant="outline" className="text-green-400 border-green-400">
-                  Điểm: {clip.score}/100
-                </Badge>
-              </div>
-              <CardTitle className="text-lg line-clamp-2 leading-tight">
-                {clip.hook_text}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-4 pt-2 flex-grow">
-              <ClipPlayer spec={clip.clipspec} />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {sorted.map((clip) => (
+        <Card key={clip.id} className="flex flex-col">
+          <CardHeader>
+            <div className="flex items-center justify-between gap-2">
+              <Badge variant={clip.rank === 1 ? "default" : "secondary"}>Top {clip.rank}</Badge>
+              <span className="text-xs text-muted-foreground">
+                {seconds(clip.start_sec)} – {seconds(clip.end_sec)}
+                {clip.score !== null ? ` · ${clip.score}đ` : ""}
+              </span>
+            </div>
+            <CardTitle className="line-clamp-2">{clip.hook_text || "Không có hook"}</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-1 flex-col gap-3">
+            <ClipPlayer clip={clip} />
+            {clip.status === "READY" && clip.output_ref && (
+              <Button
+                variant="outline"
+                size="sm"
+                render={<a href={clipDownloadUrl(clip.id)} download={`clip-${clip.rank}.mp4`} />}
+              >
+                <Download className="h-4 w-4" />
+                Tải về
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

@@ -122,13 +122,15 @@ export async function apiFetch<T>(
     method?: string;
     body?: unknown;
     signal?: AbortSignal;
+    /** Origin to call instead of the Face API — Flow Studio runs on its own port. */
+    base?: string;
   },
 ): Promise<T> {
   const token = getAuthToken();
   const isFormData = typeof FormData !== "undefined" && options?.body instanceof FormData;
   let res: Response;
   try {
-    res = await fetch(`${getApiBase()}${path}`, {
+    res = await fetch(`${options?.base ?? getApiBase()}${path}`, {
       method: options?.method ?? "GET",
       headers: {
         ...(!isFormData ? { "Content-Type": "application/json" } : {}),

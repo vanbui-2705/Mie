@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Building2, CalendarClock, FileSpreadsheet, Globe2, ListChecks, Menu, MessageSquare, Send, Settings, Share2, UserCog, Users, X } from "lucide-react";
+import { Building2, CalendarClock, Clapperboard, FileSpreadsheet, Globe2, ListChecks, Menu, MessageSquare, Send, Settings, Share2, UserCog, Users, X } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 
@@ -16,6 +16,7 @@ const navItems = [
   { name: "Chiến dịch Sheets", href: "/sheet-campaigns", icon: ListChecks, permission: "google_sheet:read" },
   { name: "Đăng trọ tự động", href: "/tro", icon: Building2, permission: "rental:read" },
   { name: "Auto Share", href: "/auto-share", icon: Share2, permission: "facebook_group:share" },
+  { name: "Flow Studio", href: "/flow-studio", icon: Clapperboard, permission: "clip:create" },
   { name: "Proxy", href: "/proxy", icon: Globe2, permission: "proxy:read" },
   { name: "Users", href: "/users", icon: UserCog, permission: "user:read" },
   { name: "Cài đặt", href: "/settings", icon: Settings, permission: "settings:read" },
