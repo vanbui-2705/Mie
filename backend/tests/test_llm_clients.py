@@ -44,6 +44,10 @@ async def test_query_llm_gemini_parses_response(monkeypatch):
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert "generativelanguage.googleapis.com" in str(request.url)
+        # The key must ride in the header, never the query string, so it cannot
+        # leak through httpx's INFO request log or an HTTPError message.
+        assert request.headers["x-goog-api-key"] == "test-key"
+        assert "test-key" not in str(request.url)
         return httpx.Response(200, json=payload)
 
     transport = httpx.MockTransport(handler)

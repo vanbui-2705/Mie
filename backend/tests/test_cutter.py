@@ -17,6 +17,27 @@ def test_build_cut_command_seeks_before_input():
     assert cmd[-1] == "out.mp4"
 
 
+def test_resegment_rebases_the_segment_onto_the_snapped_window():
+    """build_ass/generate_clipspec rebase on segment.start_sec, but the cut file
+    starts at the SNAPPED start. Without this the subtitles lead the audio by up
+    to max_shift seconds."""
+    from app.services.ai_pipeline.cutter import resegment
+    from app.services.ai_pipeline.types import ScoredSegment, Word
+
+    words = tuple(Word(start=100.0 + i, end=100.0 + i + 0.8, text=f"w{i}") for i in range(40))
+    segment = ScoredSegment(
+        rank=1, score=90.0, region_index=0, start_sec=100.0, end_sec=140.0,
+        hook_text="hook", subtitle_text="xin chào", words=words,
+    )
+
+    snapped = resegment(segment, 98.0, 138.0)
+
+    assert (snapped.start_sec, snapped.end_sec) == (98.0, 138.0)
+    assert snapped.rank == 1 and snapped.hook_text == "hook"
+    assert all(w.end > 98.0 and w.start < 138.0 for w in snapped.words)
+    assert snapped.words[-1].end <= 139.0
+
+
 def test_snap_cut_points_prefers_a_keyframe_inside_a_silence():
     keyframes = [0.0, 8.0, 10.0, 12.0, 50.0, 52.0]
     silences = [(9.5, 10.5), (51.5, 53.0)]

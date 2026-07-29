@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from app.config import settings
+from app.services.ai_pipeline.types import ScoredSegment
 
 logger = logging.getLogger("flowmeta.ai_pipeline.cutter")
 
@@ -89,6 +91,17 @@ def snap_cut_points(
     if end - start < min_sec:
         end = start + min_sec
     return round(start, 3), round(end, 3)
+
+
+def resegment(segment: ScoredSegment, start_sec: float, end_sec: float) -> ScoredSegment:
+    """Move a segment onto the window the cutter actually used.
+
+    `build_ass` and `generate_clipspec` express everything relative to
+    `segment.start_sec`, but the produced file starts at the SNAPPED start. Feeding
+    them the pre-snap segment shifts every subtitle by the snap distance.
+    """
+    words = tuple(w for w in segment.words if w.end > start_sec and w.start < end_sec)
+    return replace(segment, start_sec=start_sec, end_sec=end_sec, words=words)
 
 
 def build_cut_command(

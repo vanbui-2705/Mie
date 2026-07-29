@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,7 +64,10 @@ class Settings(BaseSettings):
 
     # AI APIs
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-1.5-flash"
+    # 1.5-flash and 2.5-flash both 404 ("no longer available to new users").
+    # Pinned rather than gemini-flash-latest so the JSON contract cannot shift
+    # under the scorer without a code change.
+    GEMINI_MODEL: str = "gemini-3.5-flash"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3"
     ANTHROPIC_API_KEY: str = ""
@@ -88,7 +93,10 @@ class Settings(BaseSettings):
     CLIP_PREFILTER_MAX_REGIONS: int = 30
     CLIP_PREFILTER_MIN_REGION_SEC: float = 20.0
     CLIP_PREFILTER_MAX_REGION_SEC: float = 90.0
-    CLIP_FONT_DIR: str = "/app/assets/fonts"
+    # Derived from this file, not hard-coded to the container's /app: the same
+    # default then resolves for a local run (backend/assets/fonts) and inside the
+    # image, so a dev run does not silently fall back to DejaVu.
+    CLIP_FONT_DIR: str = str(Path(__file__).resolve().parents[1] / "assets" / "fonts")
     CLIP_SUBTITLE_FONT: str = "Be Vietnam Pro"
     CLIP_PIPELINE_VERSION: str = "ai-v1"
     FFMPEG_BIN: str = "ffmpeg"

@@ -1,8 +1,9 @@
 """Clip selection: rubric scoring + Vietnamese translation.
 
-The LLM never sees raw timestamps to echo back verbatim. It is given numbered
-regions and returns `region_index` plus a rough start/end; this module snaps
-those to real word boundaries inside that region. That removes the fragile
+The LLM is given numbered regions whose lines carry real ASR timestamps, and it
+returns `region_index` plus a start/end copied from those markers; this module
+still snaps the pair to real word boundaries inside that region, so a hallucinated
+timestamp degrades to a nearby window instead of a wrong one. That removes the fragile
 "find the snippet's first word anywhere in the transcript" mapping the v0 code
 used, which could silently match a repeated word in a different part of the video.
 """
@@ -30,7 +31,10 @@ Rubric (0-100, weighted):
 Rules:
 - Pick at most {top_n} segments, each from a DIFFERENT region when possible.
 - Each segment must last between {min_sec} and {max_sec} seconds.
-- start_sec and end_sec are ABSOLUTE seconds and must fall inside the region you name.
+- Every transcript line is prefixed with its real timestamp as [start-end].
+- start_sec and end_sec are ABSOLUTE seconds: COPY start_sec from the marker of the
+  first line you keep and end_sec from the marker of the last line you keep. Never
+  estimate a timestamp from the text - the markers are the only source of truth.
 - The source audio may be in ANY language. `hook_text` and `subtitle_text` MUST be
   natural, idiomatic Vietnamese - translate, do not transliterate, and do not copy
   the source language.
@@ -43,12 +47,38 @@ Return ONLY a JSON array, no prose, no markdown fences. Each item:
 """
 
 
+def format_timed_lines(words: tuple[Word, ...], *, chunk_sec: float = 8.0) -> list[str]:
+    """Group words into `[start-end] text` lines carrying real ASR timestamps.
+
+    A region can be minutes long. Handing the model one untimed blob forces it to
+    guess where a sentence sits, and it guesses badly: on a 156s source it named
+    91.4s for content spoken at ~104s, so the burned subtitles trailed the audio
+    by 13s. Stamped lines give it values to copy instead of invent.
+    """
+    lines: list[str] = []
+    bucket: list[Word] = []
+    for word in words:
+        if bucket and word.end - bucket[0].start > chunk_sec:
+            lines.append(
+                f"[{bucket[0].start:.1f}-{bucket[-1].end:.1f}] "
+                + " ".join(w.text for w in bucket)
+            )
+            bucket = []
+        bucket.append(word)
+    if bucket:
+        lines.append(
+            f"[{bucket[0].start:.1f}-{bucket[-1].end:.1f}] " + " ".join(w.text for w in bucket)
+        )
+    return lines
+
+
 def build_prompt(transcript: Transcript, *, top_n: int, min_sec: float, max_sec: float) -> str:
     header = _RUBRIC.format(top_n=top_n, min_sec=int(min_sec), max_sec=int(max_sec))
     blocks = []
     for rt in transcript.regions:
+        body = "\n".join(format_timed_lines(rt.words)) or rt.text
         blocks.append(
-            f"[REGION {rt.region.index}] {rt.region.start_sec:.1f}s - {rt.region.end_sec:.1f}s\n{rt.text}"
+            f"[REGION {rt.region.index}] {rt.region.start_sec:.1f}s - {rt.region.end_sec:.1f}s\n{body}"
         )
     return f"{header}\nSource language: {transcript.language}\n\n" + "\n\n".join(blocks)
 

@@ -24,7 +24,12 @@ from app.config import settings
 from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType, ClipStatus
 from app.services.ai_pipeline.asr_engine import transcribe_regions
 from app.services.ai_pipeline.crop import compute_crop_path
-from app.services.ai_pipeline.cutter import cut_video_stream, probe_keyframes, snap_cut_points
+from app.services.ai_pipeline.cutter import (
+    cut_video_stream,
+    probe_keyframes,
+    resegment,
+    snap_cut_points,
+)
 from app.services.ai_pipeline.prefilter import detect_hot_regions, detect_silences
 from app.services.ai_pipeline.renderer import burn_vertical, resolve_font_name
 from app.services.ai_pipeline.scorer import select_clips
@@ -238,6 +243,9 @@ class ClipRunner:
             )
             row["start_sec"] = start
             row["end_sec"] = end
+            # Subtitles and the clipspec are rebased on the segment start, so they
+            # must follow the snapped window, not the one the scorer asked for.
+            segment = resegment(segment, start, end)
 
             if not await cut_video_stream(local_source, raw_path, start, end):
                 raise RuntimeError("ffmpeg stream copy failed")

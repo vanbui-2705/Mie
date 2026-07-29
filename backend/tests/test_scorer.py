@@ -29,6 +29,32 @@ def test_build_prompt_lists_regions_and_demands_vietnamese(transcript: Transcrip
     assert "30" in prompt and "60" in prompt
 
 
+def test_format_timed_lines_stamps_every_line_with_real_word_times():
+    words = tuple(Word(start=90.0 + i, end=90.0 + i + 0.9, text=f"x{i}") for i in range(20))
+    lines = scorer.format_timed_lines(words, chunk_sec=8.0)
+
+    assert lines, "expected at least one timed line"
+    assert lines[0].startswith("[90.0-")
+    # Every line carries a marker; markers are ordered and cover all the words.
+    assert all(line.startswith("[") and "]" in line for line in lines)
+    assert " ".join(line.split("] ", 1)[1] for line in lines).split() == [w.text for w in words]
+
+
+def test_build_prompt_embeds_line_timestamps_so_the_llm_does_not_guess(transcript: Transcript):
+    """Without per-line stamps the model invents start_sec from the text alone.
+
+    Observed on a real 156s source: the model returned 91.38s for content that
+    is actually spoken at ~104s, so the burned subtitles trailed the audio.
+    """
+    prompt = scorer.build_prompt(transcript, top_n=3, min_sec=30, max_sec=60)
+
+    region = transcript.regions[1]  # starts at 300.0s
+    assert "[300.0-" in prompt
+    assert "copy" in prompt.lower()
+    # The bare untimed dump must be gone.
+    assert region.text not in prompt
+
+
 def test_clamp_to_words_snaps_to_word_boundaries(transcript: Transcript):
     region_transcript = transcript.regions[0]
     start, end, words = scorer.clamp_to_words(

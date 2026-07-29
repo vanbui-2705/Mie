@@ -44,3 +44,10 @@ Desktop.ini
 .env
 .env.*
 .secrets/
+
+# Flow Studio eval artifacts (renders, transcripts, local test media)
+backend/eval_out/
+backend/test_video.mp4
+backend/test_speech.mp4
+backend/test_audio.wav
+backend/scripts/test_video.mp4

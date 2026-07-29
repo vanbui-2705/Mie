@@ -32,12 +32,19 @@ from app.services.ai_pipeline.crop import compute_crop_path  # noqa: E402
 from app.services.ai_pipeline.cutter import (  # noqa: E402
     cut_video_stream,
     probe_keyframes,
+    resegment,
     snap_cut_points,
 )
 from app.services.ai_pipeline.prefilter import detect_hot_regions, detect_silences  # noqa: E402
 from app.services.ai_pipeline.renderer import burn_vertical, resolve_font_name  # noqa: E402
 from app.services.ai_pipeline.scorer import select_clips  # noqa: E402
 from app.services.ai_pipeline.subtitle_gen import build_ass, generate_clipspec  # noqa: E402
+from app.services.ai_pipeline.types import (  # noqa: E402
+    HotRegion,
+    RegionTranscript,
+    Transcript,
+    Word,
+)
 from app.services.ai_pipeline.vad_filter import extract_audio, probe_duration  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -61,16 +68,80 @@ def hot_region_recall(regions, expected: list[dict]) -> float | None:
     return hits / len(expected)
 
 
+MID_WORD_TOLERANCE_SEC = 0.15
+
+
 def mid_word_cut_rate(cuts: list[tuple[float, float]], words) -> float | None:
-    """Fraction of cut boundaries that land strictly inside a spoken word."""
+    """Fraction of cut boundaries that land deep inside a spoken word.
+
+    "Strictly inside a word" alone is useless: faster-whisper emits contiguous
+    word spans (measured 100/104 adjacent pairs with a zero gap), so every cut
+    that falls in speech is inside some word and the metric pins at 1.0. What
+    actually audibly clips a word is a boundary far from either edge, so measure
+    the distance to the nearest edge of the word the boundary lands in.
+    """
     boundaries = [t for cut in cuts for t in cut]
     if not boundaries:
         return None
-    bad = sum(1 for t in boundaries if any(w.start < t < w.end for w in words))
+    bad = 0
+    for t in boundaries:
+        inside = [w for w in words if w.start < t < w.end]
+        if not inside:
+            continue
+        word = min(inside, key=lambda w: min(t - w.start, w.end - t))
+        if min(t - word.start, word.end - t) > MID_WORD_TOLERANCE_SEC:
+            bad += 1
     return bad / len(boundaries)
 
 
-async def evaluate(video_path: str, *, top_n: int, backend: str, expected: list[dict]) -> dict:
+def dump_transcript(transcript: Transcript, path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "language": transcript.language,
+                "regions": [
+                    {
+                        "region": {
+                            "index": rt.region.index,
+                            "start_sec": rt.region.start_sec,
+                            "end_sec": rt.region.end_sec,
+                            "energy": rt.region.energy,
+                        },
+                        "text": rt.text,
+                        "words": [{"start": w.start, "end": w.end, "text": w.text} for w in rt.words],
+                    }
+                    for rt in transcript.regions
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def load_transcript(path: Path) -> Transcript:
+    """Reload a dumped transcript so scoring/render can be iterated without ASR.
+
+    ASR is ~85% of the wall clock, so re-running it to test a prompt change costs
+    minutes per attempt.
+    """
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return Transcript(
+        language=raw["language"],
+        regions=tuple(
+            RegionTranscript(
+                region=HotRegion(**r["region"]),
+                text=r["text"],
+                words=tuple(Word(**w) for w in r["words"]),
+            )
+            for r in raw["regions"]
+        ),
+    )
+
+
+async def evaluate(
+    video_path: str, *, top_n: int, backend: str, expected: list[dict], reuse_transcript: bool = False
+) -> dict:
     out_dir = Path("eval_out") / Path(video_path).stem
     out_dir.mkdir(parents=True, exist_ok=True)
     audio_path = str(out_dir / "audio.wav")
@@ -95,8 +166,14 @@ async def evaluate(video_path: str, *, top_n: int, backend: str, expected: list[
     timings["prefilter"] = time.time() - t0
     covered = sum(r.duration for r in regions)
 
+    cache_path = out_dir / "transcript.json"
     t0 = time.time()
-    transcript = await transcribe_regions(audio_path, regions)
+    if reuse_transcript and cache_path.is_file():
+        transcript = load_transcript(cache_path)
+        logger.info("reusing cached transcript %s (ASR skipped)", cache_path)
+    else:
+        transcript = await transcribe_regions(audio_path, regions)
+        dump_transcript(transcript, cache_path)
     timings["asr"] = time.time() - t0
 
     t0 = time.time()
@@ -115,6 +192,7 @@ async def evaluate(video_path: str, *, top_n: int, backend: str, expected: list[
             segment.start_sec, segment.end_sec, keyframes, silences, min_sec=30, max_sec=60
         )
         cuts.append((start, end))
+        segment = resegment(segment, start, end)
         raw = f"{base}_raw.mp4"
         if not await cut_video_stream(video_path, raw, start, end):
             logger.error("cut failed for clip %d", segment.rank)
@@ -159,6 +237,11 @@ async def main() -> None:
     parser.add_argument("--golden", help="golden set JSON (see golden_set.example.json)")
     parser.add_argument("--backend", default=settings.SCORING_BACKEND)
     parser.add_argument("--top-n", type=int, default=3)
+    parser.add_argument(
+        "--reuse-transcript",
+        action="store_true",
+        help="skip ASR when eval_out/<video>/transcript.json exists (prompt iteration)",
+    )
     args = parser.parse_args()
 
     jobs: list[tuple[str, list[dict]]] = []
@@ -175,7 +258,15 @@ async def main() -> None:
         if not Path(path).is_file():
             logger.error("missing video: %s", path)
             continue
-        results.append(await evaluate(path, top_n=args.top_n, backend=args.backend, expected=expected))
+        results.append(
+            await evaluate(
+                path,
+                top_n=args.top_n,
+                backend=args.backend,
+                expected=expected,
+                reuse_transcript=args.reuse_transcript,
+            )
+        )
 
     print(json.dumps(results, ensure_ascii=False, indent=2))
     Path("eval_out").mkdir(parents=True, exist_ok=True)

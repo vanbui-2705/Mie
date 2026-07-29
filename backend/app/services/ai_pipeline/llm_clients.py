@@ -104,8 +104,11 @@ async def call_gemini(prompt: str) -> str:
     }
     async with _build_client() as client:
         try:
+            # The key goes in a header, never the query string: httpx logs the
+            # full URL at INFO and httpx.HTTPError embeds it in str(exc), so a
+            # `?key=` would leak the secret into logs and error messages.
             response = await client.post(
-                url, params={"key": settings.GEMINI_API_KEY}, json=payload
+                url, headers={"x-goog-api-key": settings.GEMINI_API_KEY}, json=payload
             )
             response.raise_for_status()
             data = response.json()
