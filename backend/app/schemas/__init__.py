@@ -285,6 +285,9 @@ class ClipOut(BaseModel):
     end_sec: float
     status: str
     output_ref: str | None = None
+    # The player needs the word timings and style out of clipspec v2; without it
+    # the gallery can only show a bare video element.
+    clipspec: dict | None = None
 
 
 class ClipJobOut(BaseModel):
@@ -293,3 +296,17 @@ class ClipJobOut(BaseModel):
     status: str
     error: str | None = None
     clips: list[ClipOut] = []
+
+
+class ClipJobSummary(BaseModel):
+    """One row of the job list. Deliberately without clipspec — the list would
+    otherwise carry every word timing of every clip of every job."""
+
+    id: str
+    source_type: str
+    source_name: str
+    status: str
+    error: str | None = None
+    clip_count: int = 0
+    created_at: datetime | None = None
+    finished_at: datetime | None = None

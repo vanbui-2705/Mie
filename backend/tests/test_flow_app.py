@@ -7,6 +7,7 @@ def test_flow_app_has_clip_routes() -> None:
     assert "/api/clip-jobs" in paths
     assert "/api/clip-jobs/{job_id}" in paths
     assert "/api/clips/{clip_id}/download" in paths
+    assert "/api/clips/{clip_id}/stream" in paths
     assert "/api/flow/peers/face" in paths
     assert "/api/events/stream" in paths
 

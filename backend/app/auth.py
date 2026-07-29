@@ -95,6 +95,30 @@ async def current_user(
     return user
 
 
+async def current_user_media(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """Same check as `current_user`, but a `?token=` query parameter is accepted.
+
+    A `<video src>` tag cannot set an Authorization header, so media endpoints
+    need the token in the URL — the same concession `/api/events/stream` already
+    makes. Kept separate from `current_user` so no other endpoint starts
+    accepting tokens from the query string, where they end up in access logs.
+    """
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header[7:] if auth_header.startswith("Bearer ") else request.query_params.get("token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication token is required")
+    user_id = parse_token(token)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    user = await _load_user_by_id(session, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found or disabled")
+    return user
+
+
 async def optional_current_user(
     request: Request,
     session: AsyncSession = Depends(get_session),

@@ -1,24 +1,29 @@
 """Flow Studio clip job endpoints."""
 from __future__ import annotations
 
+import os
+import re
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, StreamingResponse
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.postgres import get_session
 from app.models.sqlmodels import User
 from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType
-from app.rbac import require_permission
-from app.schemas import ClipJobOut, ClipOut
+from app.rbac import require_permission, require_permission_media
+from app.schemas import ClipJobOut, ClipJobSummary, ClipOut
 from app.services.clip_queue import build_clip_job, enqueue_clip_job
 from app.services.clip_storage import sanitize_link, save_upload
 from app.services.peer_client import peer_available
 
 router = APIRouter(tags=["clip-jobs"])
+
+_RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
+_STREAM_CHUNK = 1024 * 1024
 
 
 @router.post("/api/clip-jobs", response_model=dict)
@@ -70,6 +75,45 @@ async def create_clip_job(
     return {"job_id": str(job.id), "status": job.status.value}
 
 
+@router.get("/api/clip-jobs", response_model=list[ClipJobSummary])
+async def list_clip_jobs(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(require_permission("clip:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    counts = (
+        select(Clip.job_id, func.count(Clip.id).label("clip_count"))
+        .group_by(Clip.job_id)
+        .subquery()
+    )
+    rows = (
+        await session.execute(
+            select(ClipJob, func.coalesce(counts.c.clip_count, 0))
+            .outerjoin(counts, counts.c.job_id == ClipJob.id)
+            .where(ClipJob.user_id == user.id)
+            .order_by(ClipJob.created_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ).all()
+    return [
+        ClipJobSummary(
+            id=str(job.id),
+            source_type=job.source_type.value,
+            # The stored ref is an absolute upload path or a full URL; neither is
+            # useful in a list, and the path leaks the server layout.
+            source_name=os.path.basename(job.source_ref) or job.source_ref,
+            status=job.status.value,
+            error=job.error,
+            clip_count=clip_count,
+            created_at=job.created_at,
+            finished_at=job.finished_at,
+        )
+        for job, clip_count in rows
+    ]
+
+
 @router.get("/api/clip-jobs/{job_id}", response_model=ClipJobOut)
 async def get_clip_job(
     job_id: uuid.UUID,
@@ -85,16 +129,17 @@ async def get_clip_job(
         clips=[ClipOut(
             id=str(c.id), rank=c.rank, score=c.score, hook_text=c.hook_text,
             start_sec=c.start_sec, end_sec=c.end_sec, status=c.status.value, output_ref=c.output_ref,
+            clipspec=c.clipspec,
         ) for c in clips],
     )
 
 
-@router.get("/api/clips/{clip_id}/download")
-async def download_clip(
-    clip_id: uuid.UUID,
-    user: User = Depends(require_permission("clip:read")),
-    session: AsyncSession = Depends(get_session),
-):
+async def _owned_playable_clip(clip_id: uuid.UUID, user: User, session: AsyncSession) -> Clip:
+    """A clip the caller owns and that has a rendered file, or the right HTTP error.
+
+    Another user's clip answers 404, not 403: whether a clip id exists is itself
+    not the caller's business.
+    """
     clip = (await session.execute(select(Clip).where(Clip.id == clip_id))).scalar_one_or_none()
     if clip is None:
         raise HTTPException(status_code=404, detail="Clip not found")
@@ -103,7 +148,92 @@ async def download_clip(
         raise HTTPException(status_code=404, detail="Clip not found")
     if not clip.output_ref:
         raise HTTPException(status_code=409, detail="Clip has no rendered output yet")
+    return clip
+
+
+@router.get("/api/clips/{clip_id}/download")
+async def download_clip(
+    clip_id: uuid.UUID,
+    user: User = Depends(require_permission("clip:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    clip = await _owned_playable_clip(clip_id, user, session)
     return FileResponse(clip.output_ref, media_type="video/mp4", filename=f"clip-{clip.rank}.mp4")
+
+
+def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """`bytes=start-end` to inclusive offsets, or None when the whole file applies.
+
+    Only single ranges are honoured. Multi-range requests are answered in full,
+    which is legal and is what every browser fallback expects.
+    """
+    if not header:
+        return None
+    match = _RANGE_RE.match(header.strip())
+    if not match:
+        return None
+    raw_start, raw_end = match.group(1), match.group(2)
+    if raw_start == "":
+        if raw_end == "":
+            return None
+        length = min(int(raw_end), size)
+        if length <= 0:
+            return None
+        return size - length, size - 1
+    start = int(raw_start)
+    end = int(raw_end) if raw_end else size - 1
+    end = min(end, size - 1)
+    if start > end or start >= size:
+        raise HTTPException(status_code=416, detail="Requested range not satisfiable")
+    return start, end
+
+
+@router.get("/api/clips/{clip_id}/stream")
+async def stream_clip(
+    request: Request,
+    clip_id: uuid.UUID,
+    user: User = Depends(require_permission_media("clip:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Play a rendered clip in a <video> tag.
+
+    Separate from /download because a media element cannot send an Authorization
+    header (hence the ?token= form) and needs byte ranges to seek — which
+    Starlette 0.37's FileResponse does not implement.
+    """
+    clip = await _owned_playable_clip(clip_id, user, session)
+    path = clip.output_ref
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Rendered file is missing")
+    size = os.path.getsize(path)
+    span = _parse_range(request.headers.get("range"), size)
+    start, end = span if span else (0, size - 1)
+    length = end - start + 1
+
+    def iter_file():
+        with open(path, "rb") as handle:
+            handle.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = handle.read(min(_STREAM_CHUNK, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(length),
+        "Cache-Control": "private, max-age=3600",
+    }
+    if span:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return StreamingResponse(
+        iter_file(),
+        status_code=206 if span else 200,
+        media_type="video/mp4",
+        headers=headers,
+    )
 
 
 @router.get("/api/flow/peers/face", response_model=dict)
