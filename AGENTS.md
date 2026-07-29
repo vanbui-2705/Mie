@@ -9,3 +9,4 @@
   - What checks/tests were run and their result.
   - What remains or is blocked.
 - For long-running work, also send short status updates while working so the project owner can follow the current state.
+  -1 luật bắt buộc là tạo prompt không được chèn code vào chỉ prompt logic và hướng xử lí flow.
