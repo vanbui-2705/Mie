@@ -1,0 +1,42 @@
+"""Flow Studio standalone FastAPI app (runs independently of Face).
+
+    uvicorn app.flow_app:app --host 0.0.0.0 --port 8001
+"""
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.config import settings
+from app.db.postgres import close_db
+from app.db.redis import close_redis
+from app.routers import clip_jobs, health
+from app.sse import register_sse_endpoint
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Flow needs no proxy/profile/scheduler machinery — just shared DB + Redis.
+    try:
+        yield
+    finally:
+        await close_redis()
+        await close_db()
+
+
+app = FastAPI(title="Flow Studio API", version=settings.APP_VERSION, lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(health.router)
+app.include_router(clip_jobs.router)
+register_sse_endpoint(app, channels_default="clip")

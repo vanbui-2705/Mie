@@ -12,6 +12,8 @@ PERMISSIONS: tuple[str, ...] = (
     "facebook_group:read", "facebook_group:share",
     "task:read", "task:create", "task:cancel", "task:delete",
     "task:read:any", "task:cancel:any",
+    "clip:read", "clip:create", "clip:cancel", "clip:delete",
+    "clip:read:any", "clip:cancel:any",
     "scheduled_post:read", "scheduled_post:create", "scheduled_post:update", "scheduled_post:delete",
     "google_sheet:read", "google_sheet:create", "google_sheet:update", "google_sheet:delete",
     "rental:read", "rental:create", "rental:update", "rental:delete",

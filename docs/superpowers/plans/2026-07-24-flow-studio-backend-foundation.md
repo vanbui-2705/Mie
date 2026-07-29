@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Do not modify `app/main.py`, `app/worker.py`, or `app/services/task_queue.py`.** Face module must stay exactly as-is. Flow reuses shared infra by importing it, never by editing Face's entrypoints. (Shared modules that are additive-only — `sqlmodels.py`, `rbac_catalog.py`, `config.py`, `schemas.py`, `conftest.py` — may be appended to.)
+- **Do not modify `app/main.py`, `app/worker.py`, or `app/services/task_queue.py`.** Face module must stay exactly as-is. Flow reuses shared infra by importing it, never by editing Face's entrypoints. Clip ORM models live in their OWN file `app/models/clip_models.py` (importing the shared `Base`) — `sqlmodels.py` stays untouched. (Shared modules that are additive-only — `rbac_catalog.py`, `config.py`, `schemas.py`, `conftest.py` — may be appended to.)
 - CPU-only target — no GPU/CUDA/NVENC assumptions anywhere in code or config.
 - Two processes share ONE Postgres and ONE Redis. Flow jobs use queue key `flowmeta:clip_queue`; comment jobs keep `flowmeta:task_queue`. Never enqueue a clip job onto the comment queue.
 - Each app runs its own in-memory `EventBus`; each serves only its own SSE channels (Flow serves `clip`). This mirrors the existing Face worker/app boundary — do not attempt cross-process event delivery in this plan.
@@ -54,7 +54,7 @@ python -m app.flow_worker
 
 ## File Structure
 
-- `backend/app/models/sqlmodels.py` — **append** `ClipSourceType`, `ClipJobStatus`, `ClipStatus`, `ClipEditSource` enums + `ClipJob`, `Clip`, `ClipEdit` models.
+- `backend/app/models/clip_models.py` (new) — clip enums (`ClipSourceType`, `ClipJobStatus`, `ClipStatus`, `ClipEditSource`) + `ClipJob`, `Clip`, `ClipEdit` models, importing the shared `Base` from `sqlmodels`. `sqlmodels.py` stays untouched (Goodman-style: separate code module, shared 1 Postgres + Base + migration chain).
 - `backend/alembic/versions/20260724_0008_clip_jobs.py` — migration creating the three tables.
 - `backend/app/rbac_catalog.py` — **append** `clip:*` permission codes.
 - `backend/app/schemas.py` — **append** `ClipJobCreate`, `ClipJobOut`, `ClipOut` DTOs.
@@ -76,10 +76,12 @@ python -m app.flow_worker
 ### Task 1: Data model + migration
 
 **Files:**
-- Modify: `backend/app/models/sqlmodels.py` (append enums near the other enums; append models after `TaskLog`)
+- Create: `backend/app/models/clip_models.py` (clip enums + models, importing shared `Base` from `sqlmodels`; `sqlmodels.py` untouched)
 - Create: `backend/alembic/versions/20260724_0008_clip_jobs.py`
 - Modify: `backend/tests/conftest.py` (register new models)
 - Test: `backend/tests/test_clip_models.py`
+
+> **NOTE (supersedes the step text below):** The authoritative, up-to-date steps for this task are in the task brief the controller generates. Clip models go in the NEW file `app/models/clip_models.py` (import `from app.models.clip_models import ...`), NOT appended to `sqlmodels.py`. The prose/code below that says "In `sqlmodels.py`, add..." is retained for context only — create `clip_models.py` instead.
 
 **Interfaces:**
 - Produces:
@@ -366,7 +368,7 @@ def downgrade() -> None:
 - [ ] **Step 7: Commit**
 
 ```bash
-git add backend/app/models/sqlmodels.py backend/alembic/versions/20260724_0008_clip_jobs.py backend/tests/conftest.py backend/tests/test_clip_models.py
+git add backend/app/models/clip_models.py backend/alembic/versions/20260724_0008_clip_jobs.py backend/tests/conftest.py backend/tests/test_clip_models.py
 git commit -m "feat(flow-studio): add ClipJob/Clip/ClipEdit models + migration"
 ```
 
@@ -686,7 +688,7 @@ Create `backend/tests/test_clip_runner.py`:
 import pytest
 from sqlalchemy import select
 
-from app.models.sqlmodels import Clip, ClipJob, ClipJobStatus, ClipSourceType
+from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType
 from app.services.clip_runner import ClipRunner
 
 
@@ -779,7 +781,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import select
 
-from app.models.sqlmodels import Clip, ClipJob, ClipJobStatus, ClipStatus
+from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipStatus
 
 PHASES = (ClipJobStatus.ANALYZING, ClipJobStatus.SCORING, ClipJobStatus.RENDERING)
 
@@ -1208,7 +1210,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.db.postgres import get_session
-from app.models.sqlmodels import Clip, ClipJob, ClipJobStatus, ClipSourceType, User
+from app.models.sqlmodels import User
+from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType
 from app.rbac import require_permission
 from app.schemas import ClipJobOut, ClipOut
 from app.services.clip_queue import build_clip_job, enqueue_clip_job
