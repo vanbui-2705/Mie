@@ -12,6 +12,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.models.clip_models import ClipSourceType
+from app.services.ai_pipeline import procs
 
 logger = logging.getLogger("flowmeta.ai_pipeline.source")
 
@@ -44,12 +45,12 @@ def build_download_command(url: str, output_path: str) -> list[str]:
 async def _run(cmd: list[str]) -> tuple[int, str]:
     """Seam so tests can stub subprocess execution."""
     try:
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        process = await procs.spawn(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
     except FileNotFoundError as exc:
         raise SourceUnavailable(f"{cmd[0]} is not installed on this host") from exc
-    _, stderr = await process.communicate()
+    _, stderr = await procs.communicate(process)
     return process.returncode, stderr.decode(errors="replace")
 
 

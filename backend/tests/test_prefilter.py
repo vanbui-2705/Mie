@@ -92,6 +92,26 @@ def test_detect_hot_regions_respects_max_regions(tmp_path: Path):
     assert regions[0].start_sec < regions[1].start_sec
 
 
+def test_detect_hot_regions_never_remerges_padded_windows_past_the_cap(tmp_path: Path):
+    path = tmp_path / "overlapping-padded-windows.wav"
+    segments: list[tuple[float, float]] = []
+    for _ in range(8):
+        segments.append((1.0, 0.9))
+        segments.append((2.5, 0.002))
+    _write_wav(path, segments)
+
+    regions = detect_hot_regions(
+        str(path),
+        min_region_sec=5.0,
+        max_region_sec=5.0,
+        max_regions=8,
+        frame_sec=0.25,
+    )
+
+    assert regions
+    assert all(region.duration <= 5.0 for region in regions)
+
+
 def test_detect_hot_regions_on_silent_audio_returns_empty(tmp_path: Path):
     path = tmp_path / "silent.wav"
     _write_wav(path, [(20.0, 0.0)])

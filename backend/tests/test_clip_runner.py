@@ -34,7 +34,13 @@ def _segment(rank: int, start: float) -> ScoredSegment:
 def fake_pipeline(monkeypatch, tmp_path: Path):
     """Stub every external process so the runner can be exercised without
     ffmpeg, whisper, yt-dlp or network."""
-    state: dict[str, list] = {"cuts": [], "renders": [], "published": []}
+    state: dict[str, list] = {
+        "cuts": [],
+        "renders": [],
+        "published": [],
+        "edit_instructions": [],
+        "prefilter_max_regions": [],
+    }
 
     async def fake_resolve_source(source_type, source_ref, work_dir, job_id):
         path = tmp_path / "source.mp4"
@@ -47,6 +53,7 @@ def fake_pipeline(monkeypatch, tmp_path: Path):
         return True
 
     def fake_detect_hot_regions(wav_path, **kwargs):
+        state["prefilter_max_regions"].append(kwargs["max_regions"])
         return [HotRegion(index=0, start_sec=0.0, end_sec=120.0, energy=-12.0)]
 
     def fake_detect_silences(wav_path, **kwargs):
@@ -60,7 +67,16 @@ def fake_pipeline(monkeypatch, tmp_path: Path):
             regions=(RegionTranscript(region=region, text="hello world", words=words),),
         )
 
-    async def fake_select_clips(transcript, *, top_n, min_sec, max_sec, backend):
+    async def fake_select_clips(
+        transcript,
+        *,
+        top_n,
+        min_sec,
+        max_sec,
+        backend,
+        edit_instructions="",
+    ):
+        state["edit_instructions"].append(edit_instructions)
         return [_segment(1, 10.0), _segment(2, 60.0)]
 
     async def fake_probe_keyframes(video_path, start, end, **kwargs):
@@ -100,7 +116,13 @@ async def _make_job(session, user_id) -> ClipJob:
         user_id=user_id,
         source_type=ClipSourceType.LINK,
         source_ref="https://youtu.be/x",
-        params={"top_n": 2, "clip_min_sec": 30, "clip_max_sec": 60, "scoring_backend": "gemini"},
+        params={
+            "top_n": 2,
+            "clip_min_sec": 30,
+            "clip_max_sec": 60,
+            "scoring_backend": "gemini",
+            "edit_instructions": "Ưu tiên đoạn tự đủ ý.",
+        },
     )
     session.add(job)
     await session.commit()
@@ -115,6 +137,8 @@ async def test_runner_completes_and_persists_clips(session, session_factory, use
 
     job = await _make_job(session, user_id)
     await runner_mod.ClipRunner(session_factory=session_factory, publish=publish).run(str(job.id))
+    assert fake_pipeline["edit_instructions"] == ["Ưu tiên đoạn tự đủ ý."]
+    assert fake_pipeline["prefilter_max_regions"] == [8]
 
     await session.refresh(job)
     assert job.status == ClipJobStatus.DONE
@@ -193,7 +217,15 @@ async def test_runner_marks_error_when_source_cannot_be_resolved(session, sessio
 
 
 async def test_runner_marks_error_when_no_clips_selected(session, session_factory, user_id, fake_pipeline, monkeypatch):
-    async def empty_select(transcript, *, top_n, min_sec, max_sec, backend):
+    async def empty_select(
+        transcript,
+        *,
+        top_n,
+        min_sec,
+        max_sec,
+        backend,
+        edit_instructions="",
+    ):
         return []
 
     monkeypatch.setattr(runner_mod, "select_clips", empty_select)
@@ -207,6 +239,50 @@ async def test_runner_marks_error_when_no_clips_selected(session, session_factor
 
     await session.refresh(job)
     assert job.status == ClipJobStatus.ERROR
+
+
+async def test_runner_stops_and_keeps_cancelled_status(session, session_factory, user_id, fake_pipeline):
+    """A cancelled job must not finish DONE and must not leave clips behind."""
+    async def publish(channel, event_type, data):
+        return None
+
+    job = await _make_job(session, user_id)
+    job.status = ClipJobStatus.CANCELLED
+    await session.commit()
+
+    runner = runner_mod.ClipRunner(session_factory=session_factory, publish=publish)
+    runner._cancelled = True
+    await runner.run(str(job.id))  # swallowed, not raised
+
+    await session.refresh(job)
+    assert job.status == ClipJobStatus.CANCELLED
+    assert job.error is None
+    clips = (await session.execute(select(Clip).where(Clip.job_id == job.id))).scalars().all()
+    assert clips == []
+
+
+async def test_cancel_watcher_flags_and_kills(session, session_factory, user_id, fake_pipeline, monkeypatch):
+    killed = {"n": 0}
+
+    def fake_kill():
+        killed["n"] += 1
+        return 2
+
+    monkeypatch.setattr(runner_mod, "kill_live", fake_kill)
+
+    async def publish(channel, event_type, data):
+        return None
+
+    job = await _make_job(session, user_id)
+    job.status = ClipJobStatus.CANCELLED
+    await session.commit()
+
+    runner = runner_mod.ClipRunner(session_factory=session_factory, publish=publish)
+    ctx = await runner._load_context(str(job.id))
+    await runner._watch_cancel(ctx)
+
+    assert runner._cancelled is True
+    assert killed["n"] == 1
 
 
 async def test_runner_deletes_the_temp_audio(session, session_factory, user_id, fake_pipeline, tmp_path):

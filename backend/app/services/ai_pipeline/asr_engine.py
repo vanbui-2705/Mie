@@ -60,7 +60,7 @@ def _transcribe_slice(audio: np.ndarray, language: str | None) -> tuple[str, lis
     model = _get_model()
     segments, info = model.transcribe(
         audio,
-        beam_size=5,
+        beam_size=settings.ASR_BEAM_SIZE,
         vad_filter=True,
         word_timestamps=True,
         language=language,

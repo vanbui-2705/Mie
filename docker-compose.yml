@@ -1,3 +1,45 @@
+# Published ports bind to loopback by default: with a reverse proxy in front
+# (deploy/nginx or deploy/caddy) nothing else has any business being reachable
+# from outside the host. Set PUBLISH_HOST=0.0.0.0 to expose them on the LAN.
+x-flow-env: &flow-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-flowmeta}:${POSTGRES_PASSWORD:-flowmeta}@postgres:5432/${POSTGRES_DB:-flowmeta}
+  REDIS_URL: redis://redis:6379/0
+  FERNET_KEY: ${FERNET_KEY:?Set FERNET_KEY in .env}
+  FLOWMETA_TOKEN_SECRET: ${FLOWMETA_TOKEN_SECRET:?Set FLOWMETA_TOKEN_SECRET in .env}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  UPLOAD_DIR: ${UPLOAD_DIR:-/app/uploads}
+  CLIP_UPLOAD_DIR: ${CLIP_UPLOAD_DIR:-/app/uploads/clips}
+  CLIP_MAX_UPLOAD_BYTES: ${CLIP_MAX_UPLOAD_BYTES:-4294967296}
+  CLIP_RETENTION_ENABLED: ${CLIP_RETENTION_ENABLED:-true}
+  CLIP_SESSION_GRACE_SECONDS: ${CLIP_SESSION_GRACE_SECONDS:-120}
+  CLIP_SWEEP_INTERVAL_SECONDS: ${CLIP_SWEEP_INTERVAL_SECONDS:-60}
+  CLIP_CANCEL_POLL_SECONDS: ${CLIP_CANCEL_POLL_SECONDS:-10}
+  ASR_BACKEND: ${ASR_BACKEND:-local}
+  ASR_WHISPER_MODEL: ${ASR_WHISPER_MODEL:-small}
+  ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-int8}
+  ASR_CPU_THREADS: ${ASR_CPU_THREADS:-8}
+  ASR_BEAM_SIZE: ${ASR_BEAM_SIZE:-1}
+  SCORING_BACKEND: ${SCORING_BACKEND:-gemini}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash}
+  GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-8192}
+  GEMINI_THINKING_LEVEL: ${GEMINI_THINKING_LEVEL:-minimal}
+  LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+  LLM_RETRY_BASE_SECONDS: ${LLM_RETRY_BASE_SECONDS:-0.75}
+  LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-120}
+  TTS_BACKEND: ${TTS_BACKEND:-edge}
+  TTS_DEFAULT_VOICE: ${TTS_DEFAULT_VOICE:-vi-female}
+  TTS_TIMEOUT_SECONDS: ${TTS_TIMEOUT_SECONDS:-30}
+  TTS_MAX_RETRIES: ${TTS_MAX_RETRIES:-1}
+  TTS_RETRY_BASE_SECONDS: ${TTS_RETRY_BASE_SECONDS:-0.5}
+  TTS_MAX_TEMPO: ${TTS_MAX_TEMPO:-1.6}
+  PEXELS_API_KEY: ${PEXELS_API_KEY:-}
+  STOCK_TIMEOUT_SECONDS: ${STOCK_TIMEOUT_SECONDS:-20}
+  GEN_SCENE_PAD_SEC: ${GEN_SCENE_PAD_SEC:-0.4}
+  GEN_MAX_DURATION_SEC: ${GEN_MAX_DURATION_SEC:-120}
+  FLOW_BASE_URL: http://flow:8001
+  FACE_BASE_URL: http://backend:8000
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -90,7 +132,7 @@ services:
       redis:
         condition: service_healthy
     ports:
-      - "${BACKEND_PORT:-8000}:8000"
+      - "${PUBLISH_HOST:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
     volumes:
       - backend-logs:/app/logs
       - backend-uploads:/app/uploads
@@ -121,6 +163,65 @@ services:
         condition: service_healthy
     volumes:
       - backend-uploads:/app/uploads
+    restart: unless-stopped
+
+  # Flow Studio API — separate process, separate port, same Postgres/Redis.
+  # The port binds to loopback for local development; behind the reverse proxy
+  # the browser reaches it as /flow/* on the public origin, never directly.
+  flow:
+    build:
+      context: ./backend
+    command:
+      - uvicorn
+      - app.flow_app:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8001"
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - "*"
+    environment:
+      <<: *flow-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${PUBLISH_HOST:-127.0.0.1}:${FLOW_PORT:-8001}:8001"
+    volumes:
+      - backend-uploads:/app/uploads
+      - backend-logs:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/api/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Runs the clip pipeline (ffmpeg + faster-whisper + scoring) and the
+  # retention sweeper that deletes a job's files once its tab stops beating.
+  flow-worker:
+    build:
+      context: ./backend
+    command: ["python", "-m", "app.flow_worker"]
+    environment:
+      <<: *flow-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - backend-uploads:/app/uploads
+      - backend-logs:/app/logs
+      # Keeps the downloaded Whisper weights across restarts.
+      - flow-models:/root/.cache
     restart: unless-stopped
 
   browser-worker:
@@ -194,7 +295,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${PUBLISH_HOST:-127.0.0.1}:${FRONTEND_PORT:-3000}:3000"
     restart: unless-stopped
 
 volumes:
@@ -203,3 +304,4 @@ volumes:
   backend-logs:
   backend-uploads:
   browser-profiles:
+  flow-models:

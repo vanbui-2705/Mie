@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
+from app.services.ai_pipeline import procs
 
 logger = logging.getLogger("flowmeta.ai_pipeline.renderer")
 
@@ -50,15 +51,22 @@ def build_render_command(
     crop: dict[str, Any],
     ass_path: str,
     font_dir: str,
+    audio_path: str | None = None,
 ) -> list[str]:
     vf = (
         f"crop={int(crop['crop_w'])}:{int(crop['crop_h'])}:{int(crop['x'])}:{int(crop['y'])},"
         f"scale={OUTPUT_W}:{OUTPUT_H}:flags=bicubic,"
+        # A source with non-square pixels carries its SAR through crop/scale, so
+        # players stretch the 1080x1920 output back off 9:16. Pin it to square.
+        "setsar=1,"
         f"subtitles='{escape_filter_path(ass_path)}':fontsdir='{escape_filter_path(font_dir)}'"
     )
-    return [
-        settings.FFMPEG_BIN, "-y",
-        "-i", input_path,
+    cmd = [settings.FFMPEG_BIN, "-y", "-i", input_path]
+    if audio_path:
+        # Voice-over replaces the source track outright; -shortest stops the mix
+        # from extending the clip when the last cue overruns.
+        cmd += ["-i", audio_path, "-map", "0:v:0", "-map", "1:a:0", "-shortest"]
+    return cmd + [
         "-vf", vf,
         "-c:v", "libx264",
         "-preset", "veryfast",
@@ -78,16 +86,22 @@ async def burn_vertical(
     crop: dict[str, Any],
     ass_path: str,
     font_dir: str,
+    audio_path: str | None = None,
 ) -> bool:
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     cmd = build_render_command(
-        input_path, output_path, crop=crop, ass_path=ass_path, font_dir=font_dir
+        input_path,
+        output_path,
+        crop=crop,
+        ass_path=ass_path,
+        font_dir=font_dir,
+        audio_path=audio_path,
     )
     logger.info("rendering vertical clip -> %s", output_path)
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    process = await procs.spawn(
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    _, stderr = await process.communicate()
+    _, stderr = await procs.communicate(process)
     if process.returncode != 0:
         logger.error("ffmpeg render failed: %s", stderr.decode(errors="replace")[-2000:])
         return False

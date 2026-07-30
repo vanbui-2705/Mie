@@ -49,7 +49,9 @@ def test_scored_segment_duration():
 def test_new_settings_have_expected_defaults():
     assert settings.SCORING_BACKEND == "gemini"
     assert settings.ASR_BACKEND == "local"
-    assert settings.ASR_WHISPER_MODEL == "medium"
+    assert settings.ASR_WHISPER_MODEL == "small"
+    assert settings.ASR_CPU_THREADS == 8
+    assert settings.ASR_BEAM_SIZE == 1
     assert settings.ASR_COMPUTE_TYPE == "int8"
     assert settings.CLIP_SUBTITLE_FONT == "Be Vietnam Pro"
     assert settings.CLIP_PIPELINE_VERSION == "ai-v1"

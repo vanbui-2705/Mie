@@ -17,6 +17,11 @@ def build_clip_job(job_id: str) -> dict[str, Any]:
     return {"type": "clip_job", "job_id": job_id}
 
 
+def build_gen_job(job_id: str) -> dict[str, Any]:
+    """Prompt-to-video job. Same queue as reup so one worker drains both."""
+    return {"type": "gen_job", "job_id": job_id}
+
+
 async def enqueue_clip_job(payload: dict[str, Any]) -> int:
     redis = await get_redis()
     return int(await redis.rpush(CLIP_QUEUE_KEY, json.dumps(payload, ensure_ascii=False)))

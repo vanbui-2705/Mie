@@ -1,9 +1,22 @@
 services:
+  # Behind a reverse proxy every browser-facing URL is same-origin: the Face API
+  # is /api/*, Flow Studio is /flow/*. An empty base makes the frontend emit
+  # relative URLs, so no host or port is baked into the bundle.
+  frontend:
+    build:
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL-}
+        NEXT_PUBLIC_FLOW_API_URL: ${NEXT_PUBLIC_FLOW_API_URL:-/flow}
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL-}
+      NEXT_PUBLIC_FLOW_API_URL: ${NEXT_PUBLIC_FLOW_API_URL:-/flow}
+
   caddy:
     image: caddy:2.8-alpine
     depends_on:
       - frontend
       - backend
+      - flow
       - browser-worker
       - browserless
     environment:
@@ -24,12 +37,16 @@ services:
     depends_on:
       - frontend
       - backend
+      - flow
       - browser-worker
       - browserless
     ports:
       - "${NGINX_PORT:-8080}:80"
     volumes:
       - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Empty by default; drop a server-tls.conf here to terminate TLS in nginx
+      # (see deploy/nginx/tls/README.md).
+      - ./deploy/nginx/tls:/etc/nginx/tls:ro
     restart: unless-stopped
 
 volumes:

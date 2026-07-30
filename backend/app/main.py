@@ -62,14 +62,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     proxy._proxy_manager = pm
     scheduler_task = asyncio.create_task(_scheduler_tick()) if settings.SCHEDULER_ENABLED else None
     app.state.scheduler_task = scheduler_task
+    # app.worker publishes from its own process; without this relay none of its
+    # events reach a browser connected to this one.
+    relay_task = asyncio.create_task(
+        event_bus.run_relay(["log", "stats", "proxy", "profile"])
+    )
+    app.state.sse_relay_task = relay_task
 
     try:
         yield
     finally:
-        if scheduler_task is not None:
-            scheduler_task.cancel()
+        for task in (scheduler_task, relay_task):
+            if task is None:
+                continue
+            task.cancel()
             try:
-                await scheduler_task
+                await task
             except asyncio.CancelledError:
                 pass
 

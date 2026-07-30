@@ -11,6 +11,7 @@ Two structural rules the v0 runner broke:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -31,13 +32,20 @@ from app.services.ai_pipeline.cutter import (
     snap_cut_points,
 )
 from app.services.ai_pipeline.prefilter import detect_hot_regions, detect_silences
+from app.services.ai_pipeline.procs import kill_live
 from app.services.ai_pipeline.renderer import burn_vertical, resolve_font_name
 from app.services.ai_pipeline.scorer import select_clips
 from app.services.ai_pipeline.source import resolve_source, sha256_file
-from app.services.ai_pipeline.subtitle_gen import build_ass, generate_clipspec
+from app.services.ai_pipeline.subtitle_gen import build_ass, generate_clipspec, split_cues
+from app.services.ai_pipeline.tts_engine import build_voice_track
 from app.services.ai_pipeline.vad_filter import extract_audio
+from app.services.clip_retention import is_cancelled
 
 logger = logging.getLogger("flowmeta.clip_runner")
+
+
+class JobCancelled(Exception):
+    """The browser session went away and the sweeper marked the job CANCELLED."""
 
 
 @dataclass(frozen=True)
@@ -51,6 +59,9 @@ class JobContext:
     min_sec: float
     max_sec: float
     scoring_backend: str
+    voiceover: bool
+    voice: str
+    edit_instructions: str
 
 
 class ClipRunner:
@@ -59,6 +70,7 @@ class ClipRunner:
     def __init__(self, session_factory, publish) -> None:
         self._session_factory = session_factory
         self._publish = publish
+        self._cancelled = False
 
     # ------------------------------------------------------------------ DB
 
@@ -77,6 +89,9 @@ class ClipRunner:
                 min_sec=float(params.get("clip_min_sec", 30)),
                 max_sec=float(params.get("clip_max_sec", 60)),
                 scoring_backend=str(params.get("scoring_backend", settings.SCORING_BACKEND)),
+                voiceover=bool(params.get("voiceover", False)),
+                voice=str(params.get("voice", settings.TTS_DEFAULT_VOICE)),
+                edit_instructions=str(params.get("edit_instructions") or ""),
             )
 
     async def _set_phase(self, ctx: JobContext, status: ClipJobStatus, phase: str) -> None:
@@ -126,12 +141,37 @@ class ClipRunner:
             "clip", "error", {"user_id": user_id, "job_id": job_id, "error": message[:500]}
         )
 
+    # -------------------------------------------------------- cancellation
+
+    async def _watch_cancel(self, ctx: JobContext) -> None:
+        """Notice a cancel *during* a long step, not only between them.
+
+        Killing the live ffmpeg is the point: the phase checks alone would let a
+        render keep a core busy for minutes after the tab that wanted it closed.
+        """
+        while True:
+            if await is_cancelled(self._session_factory, ctx.job_uuid):
+                self._cancelled = True
+                killed = kill_live()
+                logger.info("job %s cancelled; killed %d live process(es)", ctx.job_id, killed)
+                return
+            await asyncio.sleep(max(0.5, settings.CLIP_CANCEL_POLL_SECONDS))
+
+    def _abort_point(self, ctx: JobContext) -> None:
+        if self._cancelled:
+            raise JobCancelled(ctx.job_id)
+
     # ------------------------------------------------------------- pipeline
 
     async def run(self, job_id: str) -> None:
         try:
             await self._process(job_id)
         except Exception as exc:
+            if self._cancelled or isinstance(exc, JobCancelled):
+                # The sweeper already wrote CANCELLED; a killed ffmpeg surfacing
+                # as "render failed" must not overwrite that with ERROR.
+                logger.info("clip job %s stopped: browser session gone", job_id)
+                return
             logger.exception("clip pipeline failed for job %s", job_id)
             await self._mark_error(job_id, str(exc))
             raise
@@ -142,14 +182,16 @@ class ClipRunner:
         work_dir.mkdir(parents=True, exist_ok=True)
         audio_path = str(work_dir / f"{ctx.job_id}.wav")
         temp_paths: list[str] = [audio_path]
-
-        local_source, source_is_temp = await resolve_source(
-            ctx.source_type, ctx.source_ref, work_dir, ctx.job_id
-        )
-        if source_is_temp:
-            temp_paths.append(local_source)
+        watcher = asyncio.create_task(self._watch_cancel(ctx))
 
         try:
+            local_source, source_is_temp = await resolve_source(
+                ctx.source_type, ctx.source_ref, work_dir, ctx.job_id
+            )
+            if source_is_temp:
+                temp_paths.append(local_source)
+
+            self._abort_point(ctx)
             await self._record_source(ctx, sha256_file(local_source))
 
             # ---- ANALYZING: audio, prefilter, ASR ----
@@ -161,14 +203,19 @@ class ClipRunner:
                 audio_path,
                 min_region_sec=settings.CLIP_PREFILTER_MIN_REGION_SEC,
                 max_region_sec=settings.CLIP_PREFILTER_MAX_REGION_SEC,
-                max_regions=settings.CLIP_PREFILTER_MAX_REGIONS,
+                max_regions=min(
+                    settings.CLIP_PREFILTER_MAX_REGIONS,
+                    max(8, ctx.top_n * 4),
+                ),
             )
             silences = detect_silences(audio_path)
+            self._abort_point(ctx)
             transcript = await transcribe_regions(audio_path, regions)
             if not transcript.regions:
                 raise RuntimeError("ASR produced no usable speech regions")
 
             # ---- SCORING ----
+            self._abort_point(ctx)
             await self._set_phase(ctx, ClipJobStatus.SCORING, "scoring")
             segments = await select_clips(
                 transcript,
@@ -176,15 +223,18 @@ class ClipRunner:
                 min_sec=ctx.min_sec,
                 max_sec=ctx.max_sec,
                 backend=ctx.scoring_backend,
+                edit_instructions=ctx.edit_instructions,
             )
             if not segments:
                 raise RuntimeError("no clips were selected from this source")
 
             # ---- RENDERING ----
+            self._abort_point(ctx)
             await self._set_phase(ctx, ClipJobStatus.RENDERING, "rendering")
             font_name = resolve_font_name(settings.CLIP_FONT_DIR, settings.CLIP_SUBTITLE_FONT)
             rows: list[dict] = []
             for segment in segments:
+                self._abort_point(ctx)
                 rows.append(
                     await self._render_one(
                         ctx, segment, local_source, work_dir, silences, font_name, temp_paths
@@ -193,6 +243,7 @@ class ClipRunner:
             await self._save_clips(ctx, rows)
             await self._finish(ctx)
         finally:
+            watcher.cancel()
             for path in temp_paths:
                 try:
                     if os.path.exists(path):
@@ -256,18 +307,39 @@ class ClipRunner:
                 build_ass(segment, font_name=font_name), encoding="utf-8"
             )
 
+            # The voice reads the same cues the subtitle burns, so the two can
+            # never drift. A backend outage returns None and the clip keeps its
+            # original audio rather than failing.
+            voice_path: str | None = None
+            if ctx.voiceover:
+                cues = split_cues(segment.subtitle_text, 0.0, end - start)
+                voice_path = await build_voice_track(
+                    cues,
+                    str(work_dir / f"{base}_voice.m4a"),
+                    voice_id=ctx.voice,
+                    total_sec=end - start,
+                    work_dir=work_dir,
+                    base=base,
+                )
+                if voice_path:
+                    temp_paths.append(voice_path)
+
             if not await burn_vertical(
                 raw_path,
                 final_path,
                 crop=crop,
                 ass_path=ass_path,
                 font_dir=settings.CLIP_FONT_DIR,
+                audio_path=voice_path,
             ):
                 raise RuntimeError("ffmpeg subtitle burn failed")
 
             row["clipspec"] = generate_clipspec(
                 segment, video_url=video_url, crop=crop, ass_relative_path=subtitle_url
             )
+            # The editor needs to know whether the track it hears is the source
+            # or a synthesised read of the translation.
+            row["clipspec"]["voiceover"] = bool(voice_path)
             row["output_ref"] = final_path
             row["status"] = ClipStatus.READY
             await self._publish(

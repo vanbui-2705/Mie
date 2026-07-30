@@ -12,13 +12,23 @@ export type FlowSettings = {
   clipMinSec: number;
   clipMaxSec: number;
   scoringBackend: string;
+  aiEditInstructions: string;
 };
+
+export const DEFAULT_AI_EDIT_INSTRUCTIONS = `Mục tiêu: tạo clip ngắn có khả năng giữ chân người xem nhưng vẫn trung thực với video gốc.
+- Ưu tiên đoạn mở đầu đi thẳng vào vấn đề, có câu gây tò mò hoặc lợi ích rõ trong 3 giây đầu.
+- Chọn đoạn tự đủ ý, có diễn biến và kết luận; người xem không cần biết phần trước vẫn hiểu được.
+- Loại bỏ lời chào, giới thiệu dài, quảng cáo lan man, khoảng lặng và nội dung lặp.
+- Ưu tiên thông tin hữu ích, cảm xúc thật, bất ngờ, tranh luận hoặc câu nói dễ chia sẻ.
+- Hook tiếng Việt ngắn, cụ thể, không giật tít sai và không bịa thêm dữ kiện.
+- Phụ đề tiếng Việt tự nhiên, giữ đúng nghĩa, câu ngắn và dễ đọc trên màn hình điện thoại.`;
 
 export const DEFAULT_FLOW_SETTINGS: FlowSettings = {
   topN: 3,
   clipMinSec: 30,
   clipMaxSec: 90,
   scoringBackend: "gemini",
+  aiEditInstructions: DEFAULT_AI_EDIT_INSTRUCTIONS,
 };
 
 const STORAGE_KEY = "flowmeta_flow_settings";

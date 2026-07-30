@@ -4,7 +4,8 @@
 """
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
@@ -13,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.db.postgres import close_db
 from app.db.redis import close_redis
+from app.event_bus import event_bus
 from app.routers import clip_jobs, health
 from app.sse import register_sse_endpoint
 
@@ -20,9 +22,15 @@ from app.sse import register_sse_endpoint
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Flow needs no proxy/profile/scheduler machinery — just shared DB + Redis.
+    # The relay is what makes progress live: the clip pipeline runs in
+    # app.flow_worker, a different process, and publishes there.
+    relay = asyncio.create_task(event_bus.run_relay(["clip"]))
     try:
         yield
     finally:
+        relay.cancel()
+        with suppress(asyncio.CancelledError):
+            await relay
         await close_redis()
         await close_db()
 

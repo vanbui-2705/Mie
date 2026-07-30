@@ -6,62 +6,59 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  createGenJob,
+  describeFlowError,
+  VOICE_OPTIONS,
+  type VoiceId,
+} from "@/lib/flow-api";
+import { useFlowSettings } from "./useFlowSettings";
 
 /**
- * The generation engine is not chosen yet, so this panel stops at the payload:
- * it validates the form and shows exactly what would be POSTed. Nothing here
- * calls the backend — there is no endpoint to call.
+ * Prompt -> vertical video. The server writes a scene script, reads it aloud
+ * with the Vietnamese TTS voice, puts a stock still behind each scene and burns
+ * the same subtitles reup uses — so the result lands in the same gallery.
  */
 const SELECT_CLASS =
   "h-9 w-full rounded-md bg-foreground/5 px-3 text-sm text-foreground ring-1 ring-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+const GEN_BACKENDS = ["gemini", "ollama", "claude"] as const;
+type GenBackend = (typeof GEN_BACKENDS)[number];
 
-const ASPECTS = ["9:16", "1:1", "16:9"];
-const VOICES = [
-  { id: "none", label: "Không lồng tiếng" },
-  { id: "vi-female", label: "Nữ (tiếng Việt)" },
-  { id: "vi-male", label: "Nam (tiếng Việt)" },
-];
-const SUBTITLE_LANGS = [
-  { id: "none", label: "Không phụ đề" },
-  { id: "vi", label: "Tiếng Việt" },
-  { id: "en", label: "English" },
-];
-
-export function GenPanel() {
+export function GenPanel({ onJobStarted }: { onJobStarted: (jobId: string) => void }) {
+  const { settings } = useFlowSettings();
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
-  const [durationSec, setDurationSec] = useState(15);
-  const [aspectRatio, setAspectRatio] = useState(ASPECTS[0]);
-  const [variants, setVariants] = useState(1);
-  const [voice, setVoice] = useState(VOICES[0].id);
-  const [subtitleLang, setSubtitleLang] = useState(SUBTITLE_LANGS[1].id);
-  const [referenceImage, setReferenceImage] = useState<File | null>(null);
+  const [durationSec, setDurationSec] = useState(30);
+  const [voice, setVoice] = useState<VoiceId>(VOICE_OPTIONS[0].id);
+  const [scriptBackend, setScriptBackend] = useState<GenBackend>(
+    GEN_BACKENDS.includes(settings.scoringBackend as GenBackend)
+      ? settings.scoringBackend as GenBackend
+      : "gemini",
+  );
+  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [payload, setPayload] = useState<string | null>(null);
 
-  const submit = (event: React.FormEvent) => {
+  const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    setPayload(null);
-    if (prompt.trim().length < 10) return setError("Prompt cần ít nhất 10 ký tự.");
-    if (durationSec < 3 || durationSec > 120) return setError("Thời lượng nằm trong khoảng 3–120 giây.");
-    if (variants < 1 || variants > 4) return setError("Số biến thể nằm trong khoảng 1–4.");
     setError(null);
-    setPayload(
-      JSON.stringify(
-        {
-          prompt: prompt.trim(),
-          negative_prompt: negativePrompt.trim() || null,
-          duration_sec: durationSec,
-          aspect_ratio: aspectRatio,
-          variants,
-          voice: voice === "none" ? null : voice,
-          subtitle_lang: subtitleLang === "none" ? null : subtitleLang,
-          reference_image: referenceImage ? referenceImage.name : null,
-        },
-        null,
-        2,
-      ),
-    );
+    if (prompt.trim().length < 10) return setError("Prompt cần ít nhất 10 ký tự.");
+    if (durationSec < 5 || durationSec > 120) return setError("Thời lượng nằm trong khoảng 5–120 giây.");
+
+    setSubmitting(true);
+    try {
+      const result = await createGenJob({
+        prompt: prompt.trim(),
+        negativePrompt: negativePrompt.trim() || undefined,
+        durationSec,
+        voice,
+        scoringBackend: scriptBackend,
+      });
+      onJobStarted(result.job_id);
+    } catch (err) {
+      setError(describeFlowError(err));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -69,7 +66,7 @@ export function GenPanel() {
       <CardHeader>
         <CardTitle>Gen video</CardTitle>
         <CardDescription>
-          Chưa chốt engine sinh video — form này kiểm tra dữ liệu và hiện payload sẽ gửi.
+          AI viết kịch bản, đọc bằng giọng Việt, ghép hình nền và phụ đề thành video dọc 9:16.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -79,18 +76,18 @@ export function GenPanel() {
             <Textarea
               id="gen-prompt"
               rows={4}
-              placeholder="Mô tả cảnh, nhân vật, không khí, chuyển động camera…"
+              placeholder="Chủ đề video: ví dụ 3 thói quen buổi sáng giúp tập trung cả ngày…"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
             />
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="gen-negative">Negative prompt</Label>
+            <Label htmlFor="gen-negative">Tránh nhắc đến (tuỳ chọn)</Label>
             <Textarea
               id="gen-negative"
               rows={2}
-              placeholder="Thứ không muốn xuất hiện: chữ, watermark, méo mặt…"
+              placeholder="Chủ đề, ví dụ hoặc cách nói không muốn xuất hiện"
               value={negativePrompt}
               onChange={(e) => setNegativePrompt(e.target.value)}
             />
@@ -102,45 +99,21 @@ export function GenPanel() {
               <Input
                 id="gen-duration"
                 type="number"
-                min={3}
+                min={5}
                 max={120}
                 value={durationSec}
                 onChange={(e) => setDurationSec(Number(e.target.value))}
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="gen-aspect">Tỉ lệ khung</Label>
-              <select
-                id="gen-aspect"
-                className={SELECT_CLASS}
-                value={aspectRatio}
-                onChange={(e) => setAspectRatio(e.target.value)}
-              >
-                {ASPECTS.map((value) => (
-                  <option key={value} value={value}>
-                    {value}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="gen-variants">Số biến thể</Label>
-              <Input
-                id="gen-variants"
-                type="number"
-                min={1}
-                max={4}
-                value={variants}
-                onChange={(e) => setVariants(Number(e.target.value))}
-              />
-            </div>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
               <Label htmlFor="gen-voice">Giọng đọc</Label>
-              <select id="gen-voice" className={SELECT_CLASS} value={voice} onChange={(e) => setVoice(e.target.value)}>
-                {VOICES.map((option) => (
+              <select
+                id="gen-voice"
+                className={SELECT_CLASS}
+                value={voice}
+                onChange={(e) => setVoice(e.target.value as VoiceId)}
+              >
+                {VOICE_OPTIONS.map((option) => (
                   <option key={option.id} value={option.id}>
                     {option.label}
                   </option>
@@ -148,43 +121,32 @@ export function GenPanel() {
               </select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="gen-subtitle">Ngôn ngữ phụ đề</Label>
+              <Label htmlFor="gen-backend">AI viết kịch bản</Label>
               <select
-                id="gen-subtitle"
+                id="gen-backend"
                 className={SELECT_CLASS}
-                value={subtitleLang}
-                onChange={(e) => setSubtitleLang(e.target.value)}
+                value={scriptBackend}
+                onChange={(e) => setScriptBackend(e.target.value as GenBackend)}
               >
-                {SUBTITLE_LANGS.map((option) => (
-                  <option key={option.id} value={option.id}>
-                    {option.label}
+                {GEN_BACKENDS.map((backend) => (
+                  <option key={backend} value={backend}>
+                    {backend}
                   </option>
                 ))}
               </select>
             </div>
           </div>
 
-          <div className="space-y-2">
-            <Label htmlFor="gen-reference">Ảnh tham chiếu (tuỳ chọn)</Label>
-            <Input
-              id="gen-reference"
-              type="file"
-              accept="image/*"
-              onChange={(e) => setReferenceImage(e.target.files?.[0] ?? null)}
-            />
-          </div>
+          <p className="rounded-lg bg-foreground/5 px-3 py-2 text-xs text-muted-foreground">
+            Thời lượng thực tế do giọng đọc quyết định: mỗi cảnh dài đúng bằng câu đọc của nó, nên
+            video có thể lệch vài giây so với con số bạn nhập.
+          </p>
 
           {error && <p className="text-xs text-destructive">{error}</p>}
 
-          <Button type="submit" className="w-full">
-            Xem payload
+          <Button type="submit" disabled={submitting} className="w-full">
+            {submitting ? "Đang gửi…" : "Tạo video"}
           </Button>
-
-          {payload && (
-            <pre className="max-h-72 overflow-auto rounded-lg bg-foreground/5 p-3 text-[11px] leading-relaxed">
-              {payload}
-            </pre>
-          )}
         </form>
       </CardContent>
     </Card>

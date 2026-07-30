@@ -31,6 +31,9 @@ from app.models.sqlmodels import Base
 class ClipSourceType(str, PyEnum):
     UPLOAD = "upload"
     LINK = "link"
+    # Gen video: `source_ref` holds the prompt instead of a path or a URL. Six
+    # characters like the others, so the existing VARCHAR(6) column still fits.
+    PROMPT = "prompt"
 
 
 class ClipJobStatus(str, PyEnum):
@@ -40,6 +43,9 @@ class ClipJobStatus(str, PyEnum):
     RENDERING = "rendering"
     DONE = "done"
     ERROR = "error"
+    # The browser session went away while the job was still running: the
+    # retention sweeper marks it and the runner stops between phases.
+    CANCELLED = "cancelled"
 
 
 class ClipStatus(str, PyEnum):
@@ -47,6 +53,9 @@ class ClipStatus(str, PyEnum):
     RENDERING = "rendering"
     READY = "ready"
     ERROR = "error"
+    # Rendered once, then deleted from disk by the retention sweeper. The row
+    # stays so the history still shows what the job produced.
+    PURGED = "purged"
 
 
 class ClipEditSource(str, PyEnum):
@@ -79,6 +88,14 @@ class ClipJob(MappedAsDataclass, Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), init=False,
     )
     finished_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None,
+    )
+    # Last sign of life from a browser tab showing this job. The retention
+    # sweeper purges anything older than CLIP_SESSION_GRACE_SECONDS.
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), init=False,
+    )
+    purged_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None,
     )
 

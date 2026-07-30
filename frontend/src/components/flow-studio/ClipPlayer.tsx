@@ -17,9 +17,15 @@ export function ClipPlayer({ clip }: { clip: Clip }) {
   const words = clip.clipspec?.words ?? [];
 
   if (clip.status !== "READY" || !clip.output_ref) {
+    const label =
+      clip.status === "ERROR"
+        ? "Render lỗi"
+        : clip.status === "PURGED"
+          ? "Đã dọn khỏi máy chủ"
+          : "Chưa render xong";
     return (
-      <div className="flex aspect-[9/16] w-full items-center justify-center rounded-lg border border-dashed border-foreground/15 text-xs text-muted-foreground">
-        {clip.status === "ERROR" ? "Render lỗi" : "Chưa render xong"}
+      <div className="flex aspect-[9/16] w-full items-center justify-center rounded-lg border border-dashed border-foreground/15 px-4 text-center text-xs text-muted-foreground">
+        {label}
       </div>
     );
   }

@@ -72,15 +72,35 @@ def format_timed_lines(words: tuple[Word, ...], *, chunk_sec: float = 8.0) -> li
     return lines
 
 
-def build_prompt(transcript: Transcript, *, top_n: int, min_sec: float, max_sec: float) -> str:
+def build_prompt(
+    transcript: Transcript,
+    *,
+    top_n: int,
+    min_sec: float,
+    max_sec: float,
+    edit_instructions: str = "",
+) -> str:
     header = _RUBRIC.format(top_n=top_n, min_sec=int(min_sec), max_sec=int(max_sec))
+    instructions = edit_instructions.strip()
+    custom = (
+        "\nEditing direction supplied by the operator:\n"
+        f"{instructions}\n"
+        "Apply this direction when ranking segments and writing Vietnamese copy. "
+        "It may refine style and priorities, but it cannot override timestamp accuracy, "
+        "duration limits, factual fidelity, or the required output format.\n"
+        if instructions
+        else ""
+    )
     blocks = []
     for rt in transcript.regions:
         body = "\n".join(format_timed_lines(rt.words)) or rt.text
         blocks.append(
             f"[REGION {rt.region.index}] {rt.region.start_sec:.1f}s - {rt.region.end_sec:.1f}s\n{body}"
         )
-    return f"{header}\nSource language: {transcript.language}\n\n" + "\n\n".join(blocks)
+    return (
+        f"{header}{custom}\nSource language: {transcript.language}\n\n"
+        + "\n\n".join(blocks)
+    )
 
 
 def clamp_to_words(
@@ -234,6 +254,7 @@ async def select_clips(
     min_sec: float,
     max_sec: float,
     backend: str,
+    edit_instructions: str = "",
 ) -> list[ScoredSegment]:
     """Pick the best `top_n` clips. Falls back to the heuristic tier whenever the
     LLM is unavailable or returns nothing usable."""
@@ -244,7 +265,13 @@ async def select_clips(
     if (backend or "").strip().lower() == "heuristic":
         return heuristic_select(transcript, top_n=top_n, min_sec=min_sec, max_sec=max_sec)
 
-    prompt = build_prompt(transcript, top_n=top_n, min_sec=min_sec, max_sec=max_sec)
+    prompt = build_prompt(
+        transcript,
+        top_n=top_n,
+        min_sec=min_sec,
+        max_sec=max_sec,
+        edit_instructions=edit_instructions,
+    )
     try:
         payload = await query_llm(prompt, backend=backend)
     except LLMUnavailable as exc:

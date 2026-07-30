@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -12,11 +12,20 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db.postgres import get_session
 from app.models.sqlmodels import User, UserStatus
 
-DEFAULT_USERNAME = os.environ.get("FLOWMETA_DEFAULT_USER", "admin")
-TOKEN_SECRET = os.environ.get("FLOWMETA_TOKEN_SECRET") or os.environ.get("FERNET_KEY") or "dev-secret"
+logger = logging.getLogger(__name__)
+
+DEFAULT_USERNAME = settings.FLOWMETA_DEFAULT_USER
+TOKEN_SECRET = settings.FLOWMETA_TOKEN_SECRET or settings.FERNET_KEY or "dev-secret"
+
+if TOKEN_SECRET == "dev-secret":  # pragma: no cover - startup guard
+    logger.warning(
+        "FLOWMETA_TOKEN_SECRET is not set; signing tokens with the built-in dev secret. "
+        "Set it before running anything but a local dev box."
+    )
 
 
 def hash_password(password: str) -> str:

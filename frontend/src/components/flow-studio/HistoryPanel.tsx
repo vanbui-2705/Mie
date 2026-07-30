@@ -4,12 +4,19 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { listClipJobs, type ClipJobSummary } from "@/lib/flow-api";
+import { describeFlowError, listClipJobs, type ClipJobSummary } from "@/lib/flow-api";
 import { RefreshCw } from "lucide-react";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   DONE: "default",
   ERROR: "destructive",
+  CANCELLED: "outline",
+};
+
+const SOURCE_LABEL: Record<string, string> = {
+  UPLOAD: "upload",
+  LINK: "link",
+  PROMPT: "gen",
 };
 
 function when(iso: string | null) {
@@ -29,7 +36,7 @@ export function HistoryPanel({ onOpenJob }: { onOpenJob: (jobId: string) => void
       setJobs(await listClipJobs(30));
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Flow API không phản hồi.");
+      setError(describeFlowError(err));
     } finally {
       setLoading(false);
     }
@@ -66,9 +73,19 @@ export function HistoryPanel({ onOpenJob }: { onOpenJob: (jobId: string) => void
               <div className="min-w-0">
                 <p className="truncate text-[13px] font-medium">{job.source_name}</p>
                 <p className="text-[11px] text-muted-foreground">
-                  {when(job.created_at)} · {job.source_type === "LINK" ? "link" : "upload"} · {job.clip_count} clip
+                  {when(job.created_at)} · {SOURCE_LABEL[job.source_type] ?? "upload"} ·{" "}
+                  {job.clip_count} clip
                 </p>
-                {job.error && <p className="mt-1 text-[11px] text-destructive">{job.error}</p>}
+                {job.error && (
+                  <p className="mt-1 text-[11px] text-destructive">
+                    {describeFlowError(job.error)}
+                  </p>
+                )}
+                {job.purged_at && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    File đã dọn khỏi máy chủ · {when(job.purged_at)}
+                  </p>
+                )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <Badge variant={STATUS_VARIANT[job.status] ?? "secondary"}>{job.status}</Badge>

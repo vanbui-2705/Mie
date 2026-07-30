@@ -46,6 +46,8 @@ def test_build_render_command_chains_crop_scale_and_subtitles():
     vf = cmd[cmd.index("-vf") + 1]
     assert vf.startswith("crop=608:1080:656:0,")
     assert "scale=1080:1920" in vf
+    # Non-square source pixels must not survive into the vertical output.
+    assert "setsar=1" in vf
     assert "subtitles='/app/x.ass'" in vf
     assert "fontsdir='/app/assets/fonts'" in vf
     assert cmd[cmd.index("-c:v") + 1] == "libx264"

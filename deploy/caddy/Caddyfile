@@ -9,17 +9,37 @@
 		X-Content-Type-Options nosniff
 		X-Frame-Options DENY
 		Referrer-Policy strict-origin-when-cross-origin
+		Cross-Origin-Opener-Policy same-origin
+		-Server
 	}
 
-	handle_path /api/* {
+	# Flow Studio runs as its own process; /flow/* is stripped and forwarded so
+	# the browser stays on one origin and port 8001 is never published.
+	# flush_interval -1 disables response buffering — required for the SSE
+	# progress stream, and it lets a rendered mp4 stream straight through.
+	handle_path /flow/* {
+		reverse_proxy flow:8001 {
+			flush_interval -1
+			transport http {
+				read_timeout 1h
+				write_timeout 1h
+			}
+		}
+	}
+
+	# handle, not handle_path: the Face API's own routes start with /api, so the
+	# prefix must NOT be stripped.
+	handle /api/* {
+		reverse_proxy backend:8000 {
+			flush_interval -1
+		}
+	}
+
+	handle /docs* {
 		reverse_proxy backend:8000
 	}
 
-	handle_path /docs* {
-		reverse_proxy backend:8000
-	}
-
-	handle_path /openapi.json {
+	handle /openapi.json {
 		reverse_proxy backend:8000
 	}
 

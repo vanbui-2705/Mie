@@ -13,17 +13,49 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.postgres import get_session
 from app.models.sqlmodels import User
-from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType
+from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType, ClipStatus
 from app.rbac import require_permission, require_permission_media
-from app.schemas import ClipJobOut, ClipJobSummary, ClipOut
-from app.services.clip_queue import build_clip_job, enqueue_clip_job
-from app.services.clip_storage import sanitize_link, save_upload
+from app.schemas import ClipHeartbeat, ClipJobOut, ClipJobSummary, ClipOut, GenJobIn
+from app.services.ai_pipeline.tts_engine import VOICES
+from app.services.ai_pipeline.llm_clients import SUPPORTED_BACKENDS
+from app.services.clip_queue import build_clip_job, build_gen_job, enqueue_clip_job
+from app.services.clip_retention import touch_jobs
+from app.services.clip_storage import (
+    EmptyUpload,
+    UploadTooLarge,
+    sanitize_link,
+    save_upload_stream,
+)
 from app.services.peer_client import peer_available
 
 router = APIRouter(tags=["clip-jobs"])
 
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 _STREAM_CHUNK = 1024 * 1024
+_REUP_BACKENDS = SUPPORTED_BACKENDS | {"heuristic"}
+
+
+def _validate_reup_params(
+    *,
+    top_n: int,
+    clip_min_sec: int,
+    clip_max_sec: int,
+    scoring_backend: str,
+    edit_instructions: str,
+) -> tuple[str, str]:
+    backend = (scoring_backend or "").strip().lower()
+    if not 1 <= top_n <= 10:
+        raise HTTPException(status_code=400, detail="top_n must be between 1 and 10")
+    if not 5 <= clip_min_sec <= 600 or not 5 <= clip_max_sec <= 600:
+        raise HTTPException(status_code=400, detail="Clip duration must be between 5 and 600 seconds")
+    if clip_min_sec >= clip_max_sec:
+        raise HTTPException(status_code=400, detail="clip_min_sec must be less than clip_max_sec")
+    if backend not in _REUP_BACKENDS:
+        raise HTTPException(status_code=400, detail=f"Unsupported scoring backend: {scoring_backend}")
+    instructions = (edit_instructions or "").strip()
+    if len(instructions) > 2000:
+        raise HTTPException(status_code=400, detail="AI edit instructions cannot exceed 2000 characters")
+    return backend, instructions
 
 
 @router.post("/api/clip-jobs", response_model=dict)
@@ -33,22 +65,44 @@ async def create_clip_job(
     clip_min_sec: int = Form(default=120),
     clip_max_sec: int = Form(default=300),
     scoring_backend: str = Form(default=settings.SCORING_BACKEND),
+    voiceover: bool = Form(default=False),
+    voice: str = Form(default=settings.TTS_DEFAULT_VOICE),
+    edit_instructions: str = Form(default=""),
     file: UploadFile | None = File(default=None),
     user: User = Depends(require_permission("clip:create")),
     session: AsyncSession = Depends(get_session),
 ):
+    scoring_backend, edit_instructions = _validate_reup_params(
+        top_n=top_n,
+        clip_min_sec=clip_min_sec,
+        clip_max_sec=clip_max_sec,
+        scoring_backend=scoring_backend,
+        edit_instructions=edit_instructions,
+    )
+    if voice not in VOICES:
+        raise HTTPException(status_code=400, detail=f"Unknown voice: {voice}")
     params = {
         "top_n": top_n, "clip_min_sec": clip_min_sec,
         "clip_max_sec": clip_max_sec, "scoring_backend": scoring_backend,
+        "voiceover": voiceover, "voice": voice,
+        "edit_instructions": edit_instructions,
     }
     if file is not None:
-        content = await file.read(settings.CLIP_MAX_UPLOAD_BYTES + 1)
-        await file.close()
-        if not content:
-            raise HTTPException(status_code=400, detail="Uploaded file is empty")
-        if len(content) > settings.CLIP_MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail="File exceeds the upload limit")
-        source_ref = save_upload(str(user.id), file.filename or "video.mp4", content)
+        # Streamed to disk in chunks: a 4 GB source must never become a 4 GB
+        # bytes object in this process.
+        try:
+            source_ref = await save_upload_stream(
+                str(user.id),
+                file.filename or "video.mp4",
+                file,
+                max_bytes=settings.CLIP_MAX_UPLOAD_BYTES,
+            )
+        except EmptyUpload as exc:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty") from exc
+        except UploadTooLarge as exc:
+            raise HTTPException(status_code=413, detail="File exceeds the upload limit") from exc
+        finally:
+            await file.close()
         source_type = ClipSourceType.UPLOAD
     elif source_link:
         try:
@@ -73,6 +127,66 @@ async def create_clip_job(
         raise HTTPException(status_code=503, detail=f"Could not enqueue job: {exc}") from exc
 
     return {"job_id": str(job.id), "status": job.status.value}
+
+
+@router.post("/api/gen-jobs", response_model=dict)
+async def create_gen_job(
+    payload: GenJobIn,
+    user: User = Depends(require_permission("clip:create")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Prompt -> vertical video. Stored as a ClipJob so history, streaming and
+    the retention sweeper treat it exactly like a reup job."""
+    if payload.voice not in VOICES:
+        raise HTTPException(status_code=400, detail=f"Unknown voice: {payload.voice}")
+    backend = (payload.scoring_backend or settings.SCORING_BACKEND).strip().lower()
+    if backend not in SUPPORTED_BACKENDS:
+        raise HTTPException(
+            status_code=400,
+            detail="Gen video requires one of these AI backends: gemini, ollama, claude",
+        )
+
+    job = ClipJob(
+        user_id=user.id,
+        source_type=ClipSourceType.PROMPT,
+        source_ref=payload.prompt.strip(),
+        params={
+            "duration_sec": payload.duration_sec,
+            "negative_prompt": payload.negative_prompt or "",
+            "voice": payload.voice,
+            "scoring_backend": backend,
+        },
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    try:
+        await enqueue_clip_job(build_gen_job(str(job.id)))
+    except Exception as exc:
+        job.status = ClipJobStatus.ERROR
+        job.error = "Could not enqueue job"
+        await session.commit()
+        raise HTTPException(status_code=503, detail=f"Could not enqueue job: {exc}") from exc
+
+    return {"job_id": str(job.id), "status": job.status.value}
+
+
+@router.post("/api/clip-jobs/heartbeat", response_model=dict)
+async def heartbeat_clip_jobs(
+    payload: ClipHeartbeat,
+    user: User = Depends(require_permission("clip:read")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Keep the named jobs' files alive.
+
+    An open tab beats every 30s; the sweeper deletes anything unseen for
+    CLIP_SESSION_GRACE_SECONDS. A refresh is back inside the window, a closed
+    tab is not. Jobs of another user are silently ignored, not rejected — the
+    body is a hint, not a command.
+    """
+    touched = await touch_jobs(session, user.id, payload.job_ids[:50])
+    return {"touched": touched}
 
 
 @router.get("/api/clip-jobs", response_model=list[ClipJobSummary])
@@ -109,6 +223,7 @@ async def list_clip_jobs(
             clip_count=clip_count,
             created_at=job.created_at,
             finished_at=job.finished_at,
+            purged_at=job.purged_at,
         )
         for job, clip_count in rows
     ]
@@ -126,6 +241,7 @@ async def get_clip_job(
     clips = (await session.execute(select(Clip).where(Clip.job_id == job_id).order_by(Clip.rank))).scalars().all()
     return ClipJobOut(
         id=str(job.id), source_type=job.source_type.value, status=job.status.value, error=job.error,
+        purged_at=job.purged_at,
         clips=[ClipOut(
             id=str(c.id), rank=c.rank, score=c.score, hook_text=c.hook_text,
             start_sec=c.start_sec, end_sec=c.end_sec, status=c.status.value, output_ref=c.output_ref,
@@ -146,6 +262,9 @@ async def _owned_playable_clip(clip_id: uuid.UUID, user: User, session: AsyncSes
     job = (await session.execute(select(ClipJob).where(ClipJob.id == clip.job_id))).scalar_one_or_none()
     if job is None or job.user_id != user.id:
         raise HTTPException(status_code=404, detail="Clip not found")
+    if clip.status == ClipStatus.PURGED or job.purged_at is not None:
+        # 410, not 404: the clip existed and the caller is not wrong to ask.
+        raise HTTPException(status_code=410, detail="Clip files were cleaned up")
     if not clip.output_ref:
         raise HTTPException(status_code=409, detail="Clip has no rendered output yet")
     return clip

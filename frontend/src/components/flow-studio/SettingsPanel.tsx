@@ -5,7 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useFlowSettings, type FlowSettings } from "./useFlowSettings";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  DEFAULT_AI_EDIT_INSTRUCTIONS,
+  useFlowSettings,
+  type FlowSettings,
+} from "./useFlowSettings";
 
 const BACKENDS = ["gemini", "ollama", "claude", "heuristic"];
 
@@ -28,6 +33,9 @@ export function SettingsPanel() {
     if (draft.topN < 1 || draft.topN > 10) return setError("Số clip nằm trong khoảng 1–10.");
     if (draft.clipMinSec < 5 || draft.clipMaxSec > 600) return setError("Độ dài clip nằm trong khoảng 5–600 giây.");
     if (draft.clipMinSec >= draft.clipMaxSec) return setError("Độ dài tối thiểu phải nhỏ hơn tối đa.");
+    if (draft.aiEditInstructions.trim().length > 2000) {
+      return setError("Cấu hình AI Edit không được vượt quá 2.000 ký tự.");
+    }
     setError(null);
     save(draft);
     setEdits({});
@@ -95,6 +103,35 @@ export function SettingsPanel() {
             <p className="text-xs text-muted-foreground">
               heuristic chạy offline, không gọi LLM — dùng khi thiếu API key.
             </p>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="set-ai-edit">Cấu hình AI Edit</Label>
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={() => update({ aiEditInstructions: DEFAULT_AI_EDIT_INSTRUCTIONS })}
+              >
+                Khôi phục mẫu
+              </Button>
+            </div>
+            <Textarea
+              id="set-ai-edit"
+              rows={10}
+              maxLength={2000}
+              value={draft.aiEditInstructions}
+              onChange={(event) => update({ aiEditInstructions: event.target.value })}
+              placeholder="Mô tả mục tiêu, loại đoạn cần ưu tiên, cách viết hook và phụ đề..."
+            />
+            <div className="flex justify-between gap-3 text-xs text-muted-foreground">
+              <span>
+                AI dùng nội dung này để chọn đoạn, chấm điểm, viết hook và phụ đề. Chỉ chứa
+                logic biên tập và hướng xử lý.
+              </span>
+              <span className="shrink-0">{draft.aiEditInstructions.length}/2000</span>
+            </div>
           </div>
 
           {error && <p className="text-xs text-destructive">{error}</p>}

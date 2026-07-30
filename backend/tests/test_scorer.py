@@ -29,6 +29,24 @@ def test_build_prompt_lists_regions_and_demands_vietnamese(transcript: Transcrip
     assert "30" in prompt and "60" in prompt
 
 
+def test_build_prompt_applies_operator_editing_direction_without_weakening_guards(
+    transcript: Transcript,
+):
+    direction = "Ưu tiên đoạn tự đủ ý, mở đầu trực tiếp và không giật tít sai."
+
+    prompt = scorer.build_prompt(
+        transcript,
+        top_n=3,
+        min_sec=30,
+        max_sec=60,
+        edit_instructions=direction,
+    )
+
+    assert direction in prompt
+    assert "cannot override timestamp accuracy" in prompt
+    assert "factual fidelity" in prompt
+
+
 def test_format_timed_lines_stamps_every_line_with_real_word_times():
     words = tuple(Word(start=90.0 + i, end=90.0 + i + 0.9, text=f"x{i}") for i in range(20))
     lines = scorer.format_timed_lines(words, chunk_sec=8.0)

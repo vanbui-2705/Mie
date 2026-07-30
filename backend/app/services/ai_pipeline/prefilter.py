@@ -166,15 +166,26 @@ def detect_hot_regions(
         hi = max(lo + 1, int(end / frame_sec))
         candidates.append((round(start, 3), round(end, 3), float(np.mean(db[lo:hi]))))
 
-    merged_final = _merge([[c[0], c[1]] for c in candidates], gap_sec=0.0)
-    scored: list[tuple[float, float, float]] = []
-    for start, end in merged_final:
-        lo = int(start / frame_sec)
-        hi = max(lo + 1, int(end / frame_sec))
-        scored.append((start, end, float(np.mean(db[lo:hi]))))
+    # Padding neighbouring short runs can make their windows overlap. Merging
+    # those windows here used to create multi-minute regions *after* the
+    # max_region_sec cap had already been applied. Keep the original capped
+    # windows and use non-maximum suppression to discard near-duplicates.
+    candidates.sort(key=lambda c: c[2], reverse=True)
+    kept: list[tuple[float, float, float]] = []
+    for candidate in candidates:
+        start, end, _energy = candidate
+        duplicate = False
+        for selected_start, selected_end, _selected_energy in kept:
+            overlap = max(0.0, min(end, selected_end) - max(start, selected_start))
+            shorter = max(0.001, min(end - start, selected_end - selected_start))
+            if overlap / shorter >= 0.5:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(candidate)
+        if len(kept) >= max_regions:
+            break
 
-    scored.sort(key=lambda c: c[2], reverse=True)
-    kept = scored[:max_regions]
     kept.sort(key=lambda c: c[0])
 
     regions = [

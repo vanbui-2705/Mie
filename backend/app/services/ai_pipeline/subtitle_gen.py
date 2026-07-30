@@ -21,9 +21,12 @@ MAX_CUE_CHARS = 42
 MAX_CUE_SEC = 3.5
 MIN_CUE_SEC = 0.8
 
+# WrapStyle 0 (smart wrapping), not 2 ("no wrapping"): a hook or a cue wider
+# than the safe area is drawn past both edges under WrapStyle 2 instead of
+# breaking onto a second line. Gen titles hit that on the very first video.
 _ASS_TEMPLATE = """[Script Info]
 ScriptType: v4.00+
-WrapStyle: 2
+WrapStyle: 0
 ScaledBorderAndShadow: yes
 PlayResX: {video_w}
 PlayResY: {video_h}
@@ -98,6 +101,41 @@ def split_cues(
         cues.append((round(cursor, 3), round(cue_end, 3), line))
         cursor = cue_end
     return cues
+
+
+def build_ass_from_cues(
+    cues: list[tuple[float, float, str]],
+    *,
+    font_name: str,
+    hook_text: str = "",
+    hook_sec: float = 3.0,
+    video_w: int = 1080,
+    video_h: int = 1920,
+) -> str:
+    """Render an ASS file from cues that are already placed on the timeline.
+
+    Reup derives its cues from the clip duration; Gen derives them from how long
+    the voice actually took to read each scene. Both end up here so there is one
+    subtitle style in the product, not two.
+    """
+    events: list[str] = []
+    hook = _escape_ass_text(hook_text.strip())
+    if hook:
+        events.append(f"Dialogue: 0,{ass_time(0.0)},{ass_time(hook_sec)},Hook,,0,0,0,,{hook}")
+
+    for start, end, line in cues:
+        events.append(
+            f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Body,,0,0,0,,{_escape_ass_text(line)}"
+        )
+
+    return _ASS_TEMPLATE.format(
+        video_w=video_w,
+        video_h=video_h,
+        font=font_name,
+        hook_size=int(video_h * 0.045),
+        body_size=int(video_h * 0.035),
+        events="\n".join(events),
+    )
 
 
 def build_ass(

@@ -1,6 +1,7 @@
 """Pydantic DTOs — request/response schemas for all API routes."""
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -295,6 +296,9 @@ class ClipJobOut(BaseModel):
     source_type: str
     status: str
     error: str | None = None
+    # Set once the retention sweeper deleted the files. The rows survive, so the
+    # UI can say "cleaned up" instead of failing to play a missing video.
+    purged_at: datetime | None = None
     clips: list[ClipOut] = []
 
 
@@ -310,3 +314,21 @@ class ClipJobSummary(BaseModel):
     clip_count: int = 0
     created_at: datetime | None = None
     finished_at: datetime | None = None
+    purged_at: datetime | None = None
+
+
+class ClipHeartbeat(BaseModel):
+    """"These jobs are still on someone's screen." Anything not heartbeaten for
+    CLIP_SESSION_GRACE_SECONDS is deleted from disk."""
+
+    job_ids: list[uuid.UUID] = []
+
+
+class GenJobIn(BaseModel):
+    """Gen video request. No file, so this one is JSON rather than a form."""
+
+    prompt: str = Field(min_length=10, max_length=2000)
+    negative_prompt: str | None = Field(default=None, max_length=1000)
+    duration_sec: int = Field(default=30, ge=5, le=120)
+    voice: str = "vi-female"
+    scoring_backend: str | None = None

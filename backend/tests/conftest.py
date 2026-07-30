@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db.postgres import close_db
 from app.models.sqlmodels import Base, User, FacebookAccount, FacebookGroup
+from app.models.clip_models import ClipJob, Clip, ClipEdit
 from sqlalchemy.dialects.postgresql import CITEXT, JSONB
 
 # Use SQLite for tests to avoid needing a running PostgreSQL
@@ -46,7 +47,6 @@ async def session() -> AsyncGenerator[AsyncSession, None]:
         FacebookAccount, FacebookGroup, ExternalPage, FacebookPage,
                 RentalConfig, RentalRoom, PublicationJob, RentalSheetMirrorJob, SheetWritebackJob,
             )
-            from app.models.clip_models import ClipJob, Clip, ClipEdit
             for tbl in (
         User, Role, Permission, RolePermission, UserRole,
                 GoogleSheetConnection, SheetCampaign, SheetSourceItem, ScheduledPost, TaskRun, TaskItem, TaskLog, OAuthAccount, PasswordResetToken,

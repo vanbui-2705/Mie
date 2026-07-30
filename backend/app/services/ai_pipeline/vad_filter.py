@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 
 from app.config import settings
+from app.services.ai_pipeline import procs
 
 logger = logging.getLogger("flowmeta.ai_pipeline.vad")
 
@@ -28,10 +29,11 @@ async def extract_audio(video_path: str, output_audio_path: str) -> bool:
         "-ac", "1",
         output_audio_path,
     ]
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    # Tracked: a cancelled job kills this mid-extraction (see procs.kill_live).
+    process = await procs.spawn(
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    _, stderr = await process.communicate()
+    _, stderr = await procs.communicate(process)
     if process.returncode != 0:
         logger.error("ffmpeg audio extraction failed: %s", stderr.decode(errors="replace")[-2000:])
         return False

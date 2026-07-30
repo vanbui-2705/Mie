@@ -14,6 +14,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from app.config import settings
+from app.services.ai_pipeline import procs
 from app.services.ai_pipeline.types import ScoredSegment
 
 logger = logging.getLogger("flowmeta.ai_pipeline.cutter")
@@ -127,10 +128,10 @@ async def cut_video_stream(
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     cmd = build_cut_command(input_path, output_path, start_sec, end_sec)
     logger.info("cutting %.3fs-%.3fs -> %s", start_sec, end_sec, output_path)
-    process = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    process = await procs.spawn(
+        cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
     )
-    _, stderr = await process.communicate()
+    _, stderr = await procs.communicate(process)
     if process.returncode != 0:
         logger.error("ffmpeg cut failed: %s", stderr.decode(errors="replace")[-2000:])
         return False

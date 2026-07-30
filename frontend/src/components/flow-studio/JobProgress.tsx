@@ -2,28 +2,35 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { getClipJob, type ClipJob } from "@/lib/flow-api";
+import { describeFlowError, getClipJob, type ClipJob } from "@/lib/flow-api";
 import { useFlowJobStream } from "./useFlowJobStream";
-
-const PHASES = ["queued", "analyzing", "scoring", "rendering", "done"] as const;
 
 const LABELS: Record<string, string> = {
   queued: "Đang chờ đến lượt…",
   analyzing: "Đang bóc băng video…",
   scoring: "AI đang chấm điểm và dịch…",
   rendering: "Đang cắt và render…",
+  // Gen video reports its own phases through the same stream.
+  scripting: "AI đang viết kịch bản…",
+  gathering: "Đang thu giọng đọc và hình nền…",
   done: "Hoàn tất",
   error: "Job lỗi",
+  cancelled: "Đã dừng (phiên đóng)",
 };
 
 const PERCENT: Record<string, number> = {
   queued: 5,
   analyzing: 30,
+  scripting: 25,
   scoring: 60,
+  gathering: 55,
   rendering: 85,
   done: 100,
   error: 100,
+  cancelled: 100,
 };
+
+const TERMINAL: ClipJob["status"][] = ["DONE", "ERROR", "CANCELLED"];
 
 function phaseFromStatus(status: ClipJob["status"]): string {
   const map: Record<string, string> = {
@@ -33,6 +40,7 @@ function phaseFromStatus(status: ClipJob["status"]): string {
     RENDERING: "rendering",
     DONE: "done",
     ERROR: "error",
+    CANCELLED: "cancelled",
   };
   return map[status] ?? "queued";
 }
@@ -43,13 +51,18 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
   const [error, setError] = useState<string | null>(null);
   const finishedRef = useRef(false);
 
+  // The latch closes only after the job actually came back. Closing it first
+  // meant one failed fetch (API restarting, network blip) left the card stuck
+  // on "Hoàn tất" forever: the parent never got a job, so it never swapped this
+  // card for the result gallery, and the poll below skipped every retry.
   const finish = useCallback(async () => {
     if (finishedRef.current) return;
-    finishedRef.current = true;
     try {
-      onFinished(await getClipJob(jobId));
+      const job = await getClipJob(jobId);
+      finishedRef.current = true;
+      onFinished(job);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Không tải được kết quả");
+      setError(describeFlowError(err));
     }
   }, [jobId, onFinished]);
 
@@ -61,7 +74,7 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
       void finish();
     } else {
       setPhase("error");
-      setError(event.error);
+      setError(describeFlowError(event.error));
       void finish();
     }
   });
@@ -78,8 +91,8 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
         const job = await getClipJob(jobId);
         if (cancelled) return;
         setPhase(phaseFromStatus(job.status));
-        if (job.status === "DONE" || job.status === "ERROR") {
-          if (job.error) setError(job.error);
+        if (TERMINAL.includes(job.status)) {
+          if (job.error) setError(describeFlowError(job.error));
           if (!finishedRef.current) {
             finishedRef.current = true;
             onFinished(job);
@@ -89,6 +102,9 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
         /* transient — the next tick retries */
       }
     };
+    // Tick once right away: if the stream never connects (API down, proxy in
+    // the way) the card would otherwise sit on "Đang chờ" for 15s.
+    void tick();
     const timer = setInterval(() => void tick(), 15000);
     return () => {
       cancelled = true;
@@ -97,7 +113,7 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
   }, [jobId, onFinished]);
 
   const percent = PERCENT[phase] ?? 5;
-  const isError = phase === "error";
+  const isError = phase === "error" || phase === "cancelled";
 
   return (
     <Card>
@@ -117,14 +133,11 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
           />
         </div>
 
-        <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-          {PHASES.map((p) => (
-            <span key={p} className={p === phase ? "text-foreground" : undefined}>
-              {p}
-            </span>
-          ))}
-          {readyCount > 0 && <span>· {readyCount} clip đã render</span>}
-        </div>
+        {/* The raw phase names used to be listed here; next to "Hoàn tất" they
+            read like the job was still working. Only the real counter stays. */}
+        {readyCount > 0 && (
+          <p className="text-[11px] text-muted-foreground">{readyCount} clip đã render</p>
+        )}
 
         {error && (
           <p className="rounded-md bg-destructive/10 px-3 py-2 text-xs text-destructive">{error}</p>
