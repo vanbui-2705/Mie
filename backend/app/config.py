@@ -124,6 +124,10 @@ class Settings(BaseSettings):
     CLIP_FONT_DIR: str = str(Path(__file__).resolve().parents[1] / "assets" / "fonts")
     CLIP_SUBTITLE_FONT: str = "Be Vietnam Pro"
     CLIP_PIPELINE_VERSION: str = "ai-v1"
+    # ASR output depends only on the audio and the settings folded into the
+    # cache key, so re-running one source with a new brief costs no ASR.
+    CLIP_ANALYSIS_CACHE_ENABLED: bool = True
+    CLIP_ANALYSIS_TTL_DAYS: int = 14
     # Vietnamese voice-over. "edge" needs no key but calls an undocumented
     # Microsoft endpoint, so a failure downgrades to the source audio instead of
     # failing the clip; "none" turns the feature off for the whole deployment.
