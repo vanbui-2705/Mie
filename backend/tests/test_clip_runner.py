@@ -42,10 +42,13 @@ def fake_pipeline(monkeypatch, tmp_path: Path):
         "prefilter_max_regions": [],
     }
 
-    async def fake_resolve_source(source_type, source_ref, work_dir, job_id):
+    async def fake_resolve(source_type, source_ref, work_dir, job_id):
         path = tmp_path / "source.mp4"
         path.write_bytes(b"video-bytes")
-        return str(path), False
+        return runner_mod.ResolvedSource(
+            analysis_media=str(path), analysis_is_temp=False,
+            video_path=str(path), video_task=None, video_is_temp=False,
+        )
 
     async def fake_extract_audio(video_path, audio_path):
         Path(audio_path).parent.mkdir(parents=True, exist_ok=True)
@@ -97,7 +100,7 @@ def fake_pipeline(monkeypatch, tmp_path: Path):
         Path(output_path).write_bytes(b"rendered")
         return True
 
-    monkeypatch.setattr(runner_mod, "resolve_source", fake_resolve_source)
+    monkeypatch.setattr(runner_mod, "resolve_source_audio_first", fake_resolve)
     monkeypatch.setattr(runner_mod, "extract_audio", fake_extract_audio)
     monkeypatch.setattr(runner_mod, "detect_hot_regions", fake_detect_hot_regions)
     monkeypatch.setattr(runner_mod, "detect_silences", fake_detect_silences)
@@ -199,7 +202,7 @@ async def test_runner_marks_error_when_source_cannot_be_resolved(session, sessio
     async def failing_resolve(source_type, source_ref, work_dir, job_id):
         raise SourceUnavailable("download failed: private video")
 
-    monkeypatch.setattr(runner_mod, "resolve_source", failing_resolve)
+    monkeypatch.setattr(runner_mod, "resolve_source_audio_first", failing_resolve)
 
     published = []
 

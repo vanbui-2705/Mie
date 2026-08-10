@@ -35,7 +35,12 @@ from app.services.ai_pipeline.prefilter import detect_hot_regions, detect_silenc
 from app.services.ai_pipeline.procs import kill_live
 from app.services.ai_pipeline.renderer import burn_vertical, resolve_font_name
 from app.services.ai_pipeline.scorer import select_clips
-from app.services.ai_pipeline.source import resolve_source, sha256_file
+from app.services.ai_pipeline.source import (
+    ResolvedSource,
+    await_video,
+    resolve_source_audio_first,
+    sha256_file,
+)
 from app.services.ai_pipeline.subtitle_gen import build_ass, generate_clipspec, split_cues
 from app.services.ai_pipeline.timing import StageTimer
 from app.services.ai_pipeline.tts_engine import build_voice_track
@@ -198,22 +203,22 @@ class ClipRunner:
         audio_path = str(work_dir / f"{ctx.job_id}.wav")
         temp_paths: list[str] = [audio_path]
         watcher = asyncio.create_task(self._watch_cancel(ctx))
+        resolved: ResolvedSource | None = None
 
         try:
             with self._timer.stage("resolve_source"):
-                local_source, source_is_temp = await resolve_source(
+                resolved = await resolve_source_audio_first(
                     ctx.source_type, ctx.source_ref, work_dir, ctx.job_id
                 )
-            if source_is_temp:
-                temp_paths.append(local_source)
+            if resolved.analysis_is_temp:
+                temp_paths.append(resolved.analysis_media)
 
             self._abort_point(ctx)
-            await self._record_source(ctx, sha256_file(local_source))
 
             # ---- ANALYZING: audio, prefilter, ASR ----
             await self._set_phase(ctx, ClipJobStatus.ANALYZING, "analyzing")
             with self._timer.stage("extract_audio"):
-                if not await extract_audio(local_source, audio_path):
+                if not await extract_audio(resolved.analysis_media, audio_path):
                     raise RuntimeError("failed to extract audio from the source video")
 
             with self._timer.stage("prefilter"):
@@ -249,6 +254,15 @@ class ClipRunner:
             if not segments:
                 raise RuntimeError("no clips were selected from this source")
 
+            # The cut needs real video. By now ASR and scoring have run, so the
+            # download has had the whole analysis to finish.
+            with self._timer.stage("await_video"):
+                local_source = await await_video(resolved)
+            if resolved.video_is_temp and local_source not in temp_paths:
+                temp_paths.append(local_source)
+            self._abort_point(ctx)
+            await self._record_source(ctx, sha256_file(local_source))
+
             # ---- RENDERING ----
             self._abort_point(ctx)
             await self._set_phase(ctx, ClipJobStatus.RENDERING, "rendering")
@@ -267,6 +281,11 @@ class ClipRunner:
         finally:
             await self._save_timings(ctx.job_uuid)
             watcher.cancel()
+            # A job that failed during analysis never awaited the video, and an
+            # un-awaited task both keeps downloading and logs its exception as
+            # "never retrieved".
+            if resolved is not None and resolved.video_task is not None:
+                resolved.video_task.cancel()
             for path in temp_paths:
                 try:
                     if os.path.exists(path):
