@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.config import settings
+from app.services.ai_pipeline import scheduling, tts_engine
 from app.services.ai_pipeline.renderer import build_render_command
 from app.services.ai_pipeline.tts_engine import (
     VOICES,
@@ -101,3 +106,95 @@ def test_render_command_with_voice_replaces_the_audio_stream():
     assert "-shortest" in cmd
     # The video filter chain must survive the extra input.
     assert "subtitles='/app/x.ass'" in cmd[cmd.index("-vf") + 1]
+
+
+# ─── concurrency ──────────────────────────────────────────────────────────────
+
+@pytest.fixture()
+def concurrent_tts(monkeypatch, tmp_path: Path):
+    """Records how many syntheses were in flight at once."""
+    state = {"live": 0, "peak": 0, "order": []}
+
+    async def fake_synthesize_cue(text, out_path, *, voice):
+        state["live"] += 1
+        state["peak"] = max(state["peak"], state["live"])
+        state["order"].append(text)
+        await asyncio.sleep(0.02)
+        Path(out_path).write_bytes(b"mp3")
+        state["live"] -= 1
+        return True
+
+    async def fake_probe_duration(path):
+        return 1.0
+
+    async def fake_mix_tracks(parts, out_path, *, total_sec):
+        state["parts"] = list(parts)
+        Path(out_path).write_bytes(b"m4a")
+        return out_path
+
+    monkeypatch.setattr(tts_engine, "synthesize_cue", fake_synthesize_cue)
+    monkeypatch.setattr(tts_engine, "probe_duration", fake_probe_duration)
+    monkeypatch.setattr(tts_engine, "mix_tracks", fake_mix_tracks)
+    monkeypatch.setattr(scheduling.settings, "FLOW_TTS_SLOTS", 4)
+    scheduling.reset_slots()
+    return state
+
+
+async def test_build_voice_track_speaks_cues_concurrently(concurrent_tts, tmp_path: Path):
+    cues = [(float(i), float(i) + 1.0, f"cue {i}") for i in range(8)]
+    out = await tts_engine.build_voice_track(
+        cues, str(tmp_path / "voice.m4a"),
+        voice_id="vi-female", total_sec=8.0, work_dir=tmp_path, base="job",
+    )
+    assert out is not None
+    assert concurrent_tts["peak"] > 1
+
+
+async def test_build_voice_track_keeps_cue_order(concurrent_tts, tmp_path: Path):
+    cues = [(float(i), float(i) + 1.0, f"cue {i}") for i in range(8)]
+    await tts_engine.build_voice_track(
+        cues, str(tmp_path / "voice.m4a"),
+        voice_id="vi-female", total_sec=8.0, work_dir=tmp_path, base="job",
+    )
+    # Concurrency must not reorder the mix: part i starts at cue i's timestamp.
+    starts = [start for _path, start, _tempo in concurrent_tts["parts"]]
+    assert starts == sorted(starts)
+    assert starts == [float(i) for i in range(8)]
+
+
+async def test_build_voice_track_respects_the_tts_slot_limit(monkeypatch, concurrent_tts, tmp_path: Path):
+    monkeypatch.setattr(scheduling.settings, "FLOW_TTS_SLOTS", 2)
+    scheduling.reset_slots()
+    cues = [(float(i), float(i) + 1.0, f"cue {i}") for i in range(8)]
+    await tts_engine.build_voice_track(
+        cues, str(tmp_path / "voice.m4a"),
+        voice_id="vi-female", total_sec=8.0, work_dir=tmp_path, base="job",
+    )
+    assert concurrent_tts["peak"] == 2
+
+
+async def test_build_voice_track_skips_a_failing_cue(monkeypatch, concurrent_tts, tmp_path: Path):
+    async def flaky(text, out_path, *, voice):
+        if text == "cue 2":
+            return False
+        Path(out_path).write_bytes(b"mp3")
+        return True
+
+    monkeypatch.setattr(tts_engine, "synthesize_cue", flaky)
+    cues = [(float(i), float(i) + 1.0, f"cue {i}") for i in range(4)]
+    await tts_engine.build_voice_track(
+        cues, str(tmp_path / "voice.m4a"),
+        voice_id="vi-female", total_sec=4.0, work_dir=tmp_path, base="job",
+    )
+    starts = [start for _path, start, _tempo in concurrent_tts["parts"]]
+    assert starts == [0.0, 1.0, 3.0]
+
+
+async def test_synthesize_scene_tracks_runs_scenes_concurrently(concurrent_tts, tmp_path: Path):
+    tracks = await tts_engine.synthesize_scene_tracks(
+        [f"scene {i}" for i in range(6)],
+        voice_id="vi-female", work_dir=tmp_path, base="gen",
+    )
+    assert len(tracks) == 6
+    assert concurrent_tts["peak"] > 1
+    assert all(duration == 1.0 for _path, duration in tracks)

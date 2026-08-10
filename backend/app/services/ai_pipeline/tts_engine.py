@@ -23,6 +23,7 @@ from pathlib import Path
 
 from app.config import settings
 from app.services.ai_pipeline import procs
+from app.services.ai_pipeline.scheduling import tts_slot
 
 logger = logging.getLogger("flowmeta.ai_pipeline.tts")
 
@@ -161,17 +162,19 @@ async def synthesize_scene_tracks(
 
     Gen video works the other way round from reup: the narration decides how
     long its scene lasts, so the caller needs the measured durations before it
-    can lay out the timeline.
+    can lay out the timeline. Order is load-bearing — `lay_out_scenes` zips
+    these against the script's scenes — and `gather` preserves it.
     """
     voice = resolve_voice(voice_id)
-    tracks: list[tuple[str, float]] = []
-    for i, text in enumerate(texts):
-        path = str(work_dir / f"{base}_scene_{i}.mp3")
-        if not await synthesize_cue(text, path, voice=voice):
-            tracks.append(("", 0.0))
-            continue
-        tracks.append((path, await probe_duration(path)))
-    return tracks
+
+    async def speak(index: int, text: str) -> tuple[str, float]:
+        path = str(work_dir / f"{base}_scene_{index}.mp3")
+        async with tts_slot():
+            if not await synthesize_cue(text, path, voice=voice):
+                return ("", 0.0)
+        return (path, await probe_duration(path))
+
+    return list(await asyncio.gather(*(speak(i, text) for i, text in enumerate(texts))))
 
 
 async def mix_tracks(
@@ -212,18 +215,32 @@ async def build_voice_track(
     parts: list[tuple[str, float, float]] = []
 
     try:
-        for i, (start, end, text) in enumerate(cues):
-            spoken_path = str(work_dir / f"{base}_tts_{i}.mp3")
-            if not await synthesize_cue(text, spoken_path, voice=voice):
-                continue
-            temp_files.append(spoken_path)
+        async def speak(index: int, cue: tuple[float, float, str]):
+            start, end, text = cue
+            spoken_path = str(work_dir / f"{base}_tts_{index}.mp3")
+            async with tts_slot():
+                if not await synthesize_cue(text, spoken_path, voice=voice):
+                    return None
             spoken = await probe_duration(spoken_path)
             if spoken <= 0:
-                continue
+                return spoken_path, None
             window = max(0.1, float(end) - float(start))
-            parts.append(
-                (spoken_path, float(start), tempo_for(spoken, window, cap=settings.TTS_MAX_TEMPO))
-            )
+            tempo = tempo_for(spoken, window, cap=settings.TTS_MAX_TEMPO)
+            return spoken_path, (spoken_path, float(start), tempo)
+
+        results = await asyncio.gather(
+            *(speak(i, cue) for i, cue in enumerate(cues))
+        )
+
+        # gather preserves input order, so the mix keeps cue order without
+        # sorting — a cue that failed simply contributes nothing.
+        for result in results:
+            if result is None:
+                continue
+            path, part = result
+            temp_files.append(path)
+            if part is not None:
+                parts.append(part)
 
         if not parts:
             logger.warning("voice-over produced no audio; keeping the source track")
