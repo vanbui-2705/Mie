@@ -14,6 +14,8 @@ import argparse
 import asyncio
 import json
 import logging
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -38,6 +40,7 @@ from app.services.ai_pipeline.cutter import (  # noqa: E402
 from app.services.ai_pipeline.prefilter import detect_hot_regions, detect_silences  # noqa: E402
 from app.services.ai_pipeline.renderer import burn_vertical, resolve_font_name  # noqa: E402
 from app.services.ai_pipeline.scorer import select_clips  # noqa: E402
+from app.services.ai_pipeline.source import sha256_file  # noqa: E402
 from app.services.ai_pipeline.subtitle_gen import build_ass, generate_clipspec  # noqa: E402
 from app.services.ai_pipeline.types import (  # noqa: E402
     HotRegion,
@@ -49,6 +52,53 @@ from app.services.ai_pipeline.vad_filter import extract_audio, probe_duration  #
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("eval")
+
+
+def _git_rev() -> str:
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=True,
+        )
+        return out.stdout.strip()
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return "nogit"
+
+
+def _peak_rss_kb() -> int | None:
+    """Peak resident set size. POSIX only — returns None on Windows."""
+    try:
+        import resource
+    except ImportError:
+        return None
+    return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+
+
+def write_report(
+    out_dir: Path,
+    *,
+    source_path: str,
+    source_sha: str,
+    stages: dict[str, float],
+    clips: list[dict],
+    metrics: dict,
+) -> Path:
+    """One JSON per run. Two of these files are the before/after comparison."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{source_sha[:12]}-{_git_rev()}.json"
+    payload = {
+        "source": os.path.basename(source_path),
+        "source_sha256": source_sha,
+        "git_rev": _git_rev(),
+        "stages": stages,
+        "total_sec": round(sum(stages.values()), 3),
+        "peak_rss_kb": _peak_rss_kb(),
+        # The equality gate: these three fields per clip must not move.
+        "clips": clips,
+        "metrics": metrics,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
 
 
 def hot_region_recall(regions, expected: list[dict]) -> float | None:
@@ -184,6 +234,9 @@ async def evaluate(
 
     font_name = resolve_font_name(settings.CLIP_FONT_DIR, settings.CLIP_SUBTITLE_FONT)
     cuts: list[tuple[float, float]] = []
+    # The equality gate compares these three fields, so they are recorded before
+    # the encode: a render that fails is a render bug, not a behaviour change.
+    clips: list[dict] = []
     t0 = time.time()
     for segment in segments:
         base = out_dir / f"clip_{segment.rank}"
@@ -193,6 +246,14 @@ async def evaluate(
         )
         cuts.append((start, end))
         segment = resegment(segment, start, end)
+        clips.append(
+            {
+                "rank": segment.rank,
+                "start_sec": segment.start_sec,
+                "end_sec": segment.end_sec,
+                "subtitle_text": segment.subtitle_text,
+            }
+        )
         raw = f"{base}_raw.mp4"
         if not await cut_video_stream(video_path, raw, start, end):
             logger.error("cut failed for clip %d", segment.rank)
@@ -216,7 +277,7 @@ async def evaluate(
 
     Path(audio_path).unlink(missing_ok=True)
     total = sum(timings.values())
-    return {
+    metrics = {
         "video": video_path,
         "duration_sec": round(duration, 1),
         "timings_sec": {k: round(v, 2) for k, v in timings.items()},
@@ -229,6 +290,16 @@ async def evaluate(
         "mid_word_cut_rate": mid_word_cut_rate(cuts, transcript.all_words),
         "language": transcript.language,
     }
+    report_path = write_report(
+        Path("eval_out"),
+        source_path=video_path,
+        source_sha=sha256_file(video_path),
+        stages={name: round(seconds, 3) for name, seconds in timings.items()},
+        clips=clips,
+        metrics=metrics,
+    )
+    print(f"report: {report_path}")
+    return metrics
 
 
 async def main() -> None:
