@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum as PyEnum
 from typing import Optional
 
@@ -19,6 +19,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    String,
     Text,
     func,
 )
@@ -165,3 +166,34 @@ class ClipEdit(Base):
     __table_args__ = (
         Index("idx_clip_edits_clip_version", clip_id, version),
     )
+
+
+class ClipAnalysis(Base):
+    """Cached transcript for one audio track, for one user.
+
+    The transcript depends only on the audio and the ASR/prefilter settings —
+    not on top_n, the length band, the editing instructions, the voice or the
+    LLM backend. Re-running the same source with different instructions used to
+    pay the full ASR bill again, and that is the most common thing a user does.
+
+    Scoped per user on purpose: two accounts uploading byte-identical files do
+    not share a transcript.
+    """
+
+    __tablename__ = "clip_analysis"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    cache_key: Mapped[str] = mapped_column(String(128), unique=True, index=True, nullable=False)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+    last_used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True
+    )
+    hit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
