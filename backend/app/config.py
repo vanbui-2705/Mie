@@ -147,6 +147,14 @@ class Settings(BaseSettings):
     FFPROBE_BIN: str = "ffprobe"
     YTDLP_BIN: str = "yt-dlp"
 
+    # --- Flow pipeline resource slots -----------------------------------
+    # Work is split by the resource it actually consumes. Before this, a job
+    # waiting on the edge-TTS endpoint held the whole pipeline, and so did an
+    # ffmpeg burn — one sequential lane for three different kinds of waiting.
+    FLOW_CPU_SLOTS: int = 0             # 0 = auto: cores - 1
+    FLOW_NET_SLOTS: int = 8
+    FLOW_TTS_SLOTS: int = 4             # edge-tts is unofficial; stay polite
+
     # Cross-module peer endpoints (used only when the peer is up)
     FACE_BASE_URL: str = "http://localhost:8000"
     FLOW_BASE_URL: str = "http://localhost:8001"
