@@ -1,9 +1,11 @@
 import pytest
 
+from route_paths import route_paths
+
 
 def test_flow_app_has_clip_routes() -> None:
     from app.flow_app import app
-    paths = {r.path for r in app.routes}
+    paths = route_paths(app)
     assert "/api/clip-jobs" in paths
     assert "/api/clip-jobs/{job_id}" in paths
     assert "/api/clips/{clip_id}/download" in paths
@@ -15,7 +17,7 @@ def test_flow_app_has_clip_routes() -> None:
 def test_flow_app_excludes_face_routes() -> None:
     # Flow must be independent — no comment/task endpoints leak in.
     from app.flow_app import app
-    paths = {r.path for r in app.routes}
+    paths = route_paths(app)
     assert not any(p.startswith("/api/comment-tasks") for p in paths)
     assert not any(p.startswith("/api/tasks") for p in paths)
 

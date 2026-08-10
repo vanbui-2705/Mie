@@ -11,10 +11,11 @@ from app.main import app
 from app.models.sqlmodels import User, UserStatus
 from app.routers import tasks
 from app.routers.page_tasks import _parse_post_targets
+from route_paths import route_signatures
 
 
 def test_canonical_routes_are_registered() -> None:
-    routes = {(route.path, ",".join(sorted(route.methods))) for route in app.routes}
+    routes = route_signatures(app)
     expected = {
         ("/api/profiles/import", "POST"),
         ("/api/tasks/start", "POST"),
