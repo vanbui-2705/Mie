@@ -29,6 +29,7 @@ from app.services.ai_pipeline.script_writer import VideoScript, write_script
 from app.services.ai_pipeline.slideshow import build_slideshow_command
 from app.services.ai_pipeline.stock_media import backdrop_source, resolve_backdrop
 from app.services.ai_pipeline.subtitle_gen import build_ass_from_cues, split_cues
+from app.services.ai_pipeline.timing import StageTimer
 from app.services.ai_pipeline.tts_engine import mix_tracks, synthesize_scene_tracks
 from app.services.clip_retention import is_cancelled
 
@@ -118,6 +119,7 @@ class GenRunner:
         self._session_factory = session_factory
         self._publish = publish
         self._cancelled = False
+        self._timer = StageTimer()
 
     # ------------------------------------------------------------------ DB
 
@@ -149,6 +151,19 @@ class GenRunner:
         await self._publish(
             "clip", "phase", {"user_id": ctx.user_id, "job_id": ctx.job_id, "phase": phase}
         )
+
+    async def _save_timings(self, job_uuid: uuid.UUID) -> None:
+        """Persist the stage breakdown on the job so a slow run is diagnosable."""
+        async with self._session_factory() as session:
+            job = (
+                await session.execute(select(ClipJob).where(ClipJob.id == job_uuid))
+            ).scalar_one_or_none()
+            if job is None:
+                return
+            params = dict(job.params or {})
+            params["timings"] = self._timer.as_dict()
+            job.params = params
+            await session.commit()
 
     async def _save_clip(self, ctx: GenContext, row: dict) -> None:
         async with self._session_factory() as session:
@@ -216,20 +231,22 @@ class GenRunner:
         try:
             # ---- ANALYZING: the script ----
             await self._set_phase(ctx, ClipJobStatus.ANALYZING, "scripting")
-            script = await write_script(
-                ctx.prompt,
-                duration_sec=ctx.duration_sec,
-                backend=ctx.backend,
-                negative_prompt=ctx.negative_prompt,
-                minimum_scenes=len(ctx.image_paths),
-            )
+            with self._timer.stage("script"):
+                script = await write_script(
+                    ctx.prompt,
+                    duration_sec=ctx.duration_sec,
+                    backend=ctx.backend,
+                    negative_prompt=ctx.negative_prompt,
+                    minimum_scenes=len(ctx.image_paths),
+                )
 
             # ---- SCORING: voice first, then the timeline it implies ----
             self._abort_point(ctx)
             await self._set_phase(ctx, ClipJobStatus.SCORING, "gathering")
-            tracks = await synthesize_scene_tracks(
-                script.narrations, voice_id=ctx.voice, work_dir=work_dir, base=base
-            )
+            with self._timer.stage("tts"):
+                tracks = await synthesize_scene_tracks(
+                    script.narrations, voice_id=ctx.voice, work_dir=work_dir, base=base
+                )
             temp_paths.extend(path for path, _ in tracks if path)
             timeline = lay_out_scenes(
                 [duration for _path, duration in tracks],
@@ -240,30 +257,33 @@ class GenRunner:
             self._abort_point(ctx)
             backdrops: list[tuple[str, float]] = []
             visual_sources: list[str] = []
-            for i, scene in enumerate(script.scenes):
-                image = uploaded_image_for_scene(ctx.image_paths, i, len(script.scenes))
-                visual_source = "uploaded" if image else ""
-                if image and not os.path.isfile(image):
-                    raise RuntimeError(f"uploaded image is missing for scene {i + 1}")
-                if image is None:
-                    image = await resolve_backdrop(scene.image_query, work_dir, base, i)
-                    visual_source = backdrop_source(image) if image else ""
-                if image is None:
-                    raise RuntimeError(f"could not obtain a backdrop for scene {i + 1}")
-                if visual_source != "uploaded":
-                    temp_paths.append(image)
-                backdrops.append((image, timeline.durations[i]))
-                visual_sources.append(visual_source)
+            with self._timer.stage("backdrops"):
+                for i, scene in enumerate(script.scenes):
+                    image = uploaded_image_for_scene(ctx.image_paths, i, len(script.scenes))
+                    visual_source = "uploaded" if image else ""
+                    if image and not os.path.isfile(image):
+                        raise RuntimeError(f"uploaded image is missing for scene {i + 1}")
+                    if image is None:
+                        image = await resolve_backdrop(scene.image_query, work_dir, base, i)
+                        visual_source = backdrop_source(image) if image else ""
+                    if image is None:
+                        raise RuntimeError(f"could not obtain a backdrop for scene {i + 1}")
+                    if visual_source != "uploaded":
+                        temp_paths.append(image)
+                    backdrops.append((image, timeline.durations[i]))
+                    visual_sources.append(visual_source)
 
             # ---- RENDERING ----
             self._abort_point(ctx)
             await self._set_phase(ctx, ClipJobStatus.RENDERING, "rendering")
-            row = await self._render(
-                ctx, script, timeline, tracks, backdrops, visual_sources, work_dir, temp_paths
-            )
+            with self._timer.stage("render"):
+                row = await self._render(
+                    ctx, script, timeline, tracks, backdrops, visual_sources, work_dir, temp_paths
+                )
             await self._save_clip(ctx, row)
             await self._finish(ctx)
         finally:
+            await self._save_timings(ctx.job_uuid)
             watcher.cancel()
             for path in temp_paths:
                 try:

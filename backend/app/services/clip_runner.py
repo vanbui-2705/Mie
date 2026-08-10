@@ -37,6 +37,7 @@ from app.services.ai_pipeline.renderer import burn_vertical, resolve_font_name
 from app.services.ai_pipeline.scorer import select_clips
 from app.services.ai_pipeline.source import resolve_source, sha256_file
 from app.services.ai_pipeline.subtitle_gen import build_ass, generate_clipspec, split_cues
+from app.services.ai_pipeline.timing import StageTimer
 from app.services.ai_pipeline.tts_engine import build_voice_track
 from app.services.ai_pipeline.vad_filter import extract_audio
 from app.services.clip_retention import is_cancelled
@@ -71,6 +72,7 @@ class ClipRunner:
         self._session_factory = session_factory
         self._publish = publish
         self._cancelled = False
+        self._timer = StageTimer()
 
     # ------------------------------------------------------------------ DB
 
@@ -109,6 +111,19 @@ class ClipRunner:
             job.source_sha256 = sha
             params = dict(job.params or {})
             params["pipeline_version"] = settings.CLIP_PIPELINE_VERSION
+            job.params = params
+            await session.commit()
+
+    async def _save_timings(self, job_uuid: uuid.UUID) -> None:
+        """Persist the stage breakdown on the job so a slow run is diagnosable."""
+        async with self._session_factory() as session:
+            job = (
+                await session.execute(select(ClipJob).where(ClipJob.id == job_uuid))
+            ).scalar_one_or_none()
+            if job is None:
+                return
+            params = dict(job.params or {})
+            params["timings"] = self._timer.as_dict()
             job.params = params
             await session.commit()
 
@@ -185,9 +200,10 @@ class ClipRunner:
         watcher = asyncio.create_task(self._watch_cancel(ctx))
 
         try:
-            local_source, source_is_temp = await resolve_source(
-                ctx.source_type, ctx.source_ref, work_dir, ctx.job_id
-            )
+            with self._timer.stage("resolve_source"):
+                local_source, source_is_temp = await resolve_source(
+                    ctx.source_type, ctx.source_ref, work_dir, ctx.job_id
+                )
             if source_is_temp:
                 temp_paths.append(local_source)
 
@@ -196,35 +212,40 @@ class ClipRunner:
 
             # ---- ANALYZING: audio, prefilter, ASR ----
             await self._set_phase(ctx, ClipJobStatus.ANALYZING, "analyzing")
-            if not await extract_audio(local_source, audio_path):
-                raise RuntimeError("failed to extract audio from the source video")
+            with self._timer.stage("extract_audio"):
+                if not await extract_audio(local_source, audio_path):
+                    raise RuntimeError("failed to extract audio from the source video")
 
-            regions = detect_hot_regions(
-                audio_path,
-                min_region_sec=settings.CLIP_PREFILTER_MIN_REGION_SEC,
-                max_region_sec=settings.CLIP_PREFILTER_MAX_REGION_SEC,
-                max_regions=min(
-                    settings.CLIP_PREFILTER_MAX_REGIONS,
-                    max(8, ctx.top_n * 4),
-                ),
-            )
-            silences = detect_silences(audio_path)
+            with self._timer.stage("prefilter"):
+                regions = detect_hot_regions(
+                    audio_path,
+                    min_region_sec=settings.CLIP_PREFILTER_MIN_REGION_SEC,
+                    max_region_sec=settings.CLIP_PREFILTER_MAX_REGION_SEC,
+                    max_regions=min(
+                        settings.CLIP_PREFILTER_MAX_REGIONS,
+                        max(8, ctx.top_n * 4),
+                    ),
+                )
+            with self._timer.stage("silences"):
+                silences = detect_silences(audio_path)
             self._abort_point(ctx)
-            transcript = await transcribe_regions(audio_path, regions)
+            with self._timer.stage("asr"):
+                transcript = await transcribe_regions(audio_path, regions)
             if not transcript.regions:
                 raise RuntimeError("ASR produced no usable speech regions")
 
             # ---- SCORING ----
             self._abort_point(ctx)
             await self._set_phase(ctx, ClipJobStatus.SCORING, "scoring")
-            segments = await select_clips(
-                transcript,
-                top_n=ctx.top_n,
-                min_sec=ctx.min_sec,
-                max_sec=ctx.max_sec,
-                backend=ctx.scoring_backend,
-                edit_instructions=ctx.edit_instructions,
-            )
+            with self._timer.stage("scoring"):
+                segments = await select_clips(
+                    transcript,
+                    top_n=ctx.top_n,
+                    min_sec=ctx.min_sec,
+                    max_sec=ctx.max_sec,
+                    backend=ctx.scoring_backend,
+                    edit_instructions=ctx.edit_instructions,
+                )
             if not segments:
                 raise RuntimeError("no clips were selected from this source")
 
@@ -233,16 +254,18 @@ class ClipRunner:
             await self._set_phase(ctx, ClipJobStatus.RENDERING, "rendering")
             font_name = resolve_font_name(settings.CLIP_FONT_DIR, settings.CLIP_SUBTITLE_FONT)
             rows: list[dict] = []
-            for segment in segments:
-                self._abort_point(ctx)
-                rows.append(
-                    await self._render_one(
-                        ctx, segment, local_source, work_dir, silences, font_name, temp_paths
+            with self._timer.stage("render"):
+                for segment in segments:
+                    self._abort_point(ctx)
+                    rows.append(
+                        await self._render_one(
+                            ctx, segment, local_source, work_dir, silences, font_name, temp_paths
+                        )
                     )
-                )
             await self._save_clips(ctx, rows)
             await self._finish(ctx)
         finally:
+            await self._save_timings(ctx.job_uuid)
             watcher.cancel()
             for path in temp_paths:
                 try:
