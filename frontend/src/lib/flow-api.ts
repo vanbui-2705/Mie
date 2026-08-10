@@ -203,11 +203,26 @@ export type CreateGenJobInput = {
   durationSec: number;
   voice: VoiceId;
   scoringBackend?: string;
+  images?: File[];
 };
 
 /** Prompt -> video. The server stores it as a clip job, so the progress card,
  *  the gallery and the history list all work on the returned id unchanged. */
 export function createGenJob(input: CreateGenJobInput, signal?: AbortSignal) {
+  if (input.images?.length) {
+    const form = new FormData();
+    form.append("prompt", input.prompt);
+    form.append("negative_prompt", input.negativePrompt ?? "");
+    form.append("duration_sec", String(input.durationSec));
+    form.append("voice", input.voice);
+    form.append("scoring_backend", input.scoringBackend ?? "gemini");
+    input.images.forEach((image) => form.append("images", image));
+    return flowFetch<{ job_id: string; status: ClipJobStatus }>("/api/gen-jobs/from-images", {
+      method: "POST",
+      body: form,
+      signal,
+    }).then((result) => ({ ...result, status: upper<ClipJobStatus>(result.status, "QUEUED") }));
+  }
   return flowFetch<{ job_id: string; status: ClipJobStatus }>("/api/gen-jobs", {
     method: "POST",
     body: {
@@ -227,7 +242,7 @@ export function getClipJob(jobId: string, signal?: AbortSignal) {
 
 /**
  * "These jobs are still on screen." The server deletes the source and the
- * rendered mp4s of any job it has not heard about for two minutes, so an open
+ * rendered mp4s of any job it has not heard about for one day, so an open
  * tab must keep beating; a refresh is back well inside that window.
  */
 export function heartbeatClipJobs(jobIds: string[], signal?: AbortSignal) {

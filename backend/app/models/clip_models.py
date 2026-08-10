@@ -53,8 +53,8 @@ class ClipStatus(str, PyEnum):
     RENDERING = "rendering"
     READY = "ready"
     ERROR = "error"
-    # Rendered once, then deleted from disk by the retention sweeper. The row
-    # stays so the history still shows what the job produced.
+    # Kept for compatibility with records created by the earlier file-only
+    # retention policy. The current sweeper removes expired rows completely.
     PURGED = "purged"
 
 
@@ -91,7 +91,7 @@ class ClipJob(MappedAsDataclass, Base):
         DateTime(timezone=True), nullable=True, default=None,
     )
     # Last sign of life from a browser tab showing this job. The retention
-    # sweeper purges anything older than CLIP_SESSION_GRACE_SECONDS.
+    # sweeper deletes files and database rows older than the grace window.
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), init=False,
     )

@@ -1,18 +1,18 @@
-"""Auto-purge for Flow Studio artefacts.
+"""Automatic one-day cleanup for Flow Studio files and database rows.
 
 A clip job owns real disk: the uploaded source (up to 4 GB), one rendered mp4
 per clip and its .ass sidecar. The only party that wants them is the browser tab
 that produced them — once the user has downloaded what they came for and the tab
 is gone, nothing will ever read those bytes again.
 
-So liveness is driven by the page: it heartbeats `last_seen_at` while it is
-open, and this module deletes anything unseen for longer than the grace window.
-A refresh is back within a second and keeps its files; a closed tab, a crashed
-browser or a killed session all decay the same way.
+Liveness is driven by the page: it heartbeats `last_seen_at` while it is open.
+After the grace window, this module removes the job's files plus its job, clip
+and edit rows. A refresh keeps the job; an abandoned session expires.
 
 The sweep is two-pass on purpose. A job that is still running is only marked
 CANCELLED — the runner notices between phases, kills its ffmpeg and stops. The
-files are deleted on the next pass, when nothing can be writing to them.
+files and database rows are deleted on the next pass, when nothing can be
+writing to them.
 """
 from __future__ import annotations
 
@@ -22,10 +22,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.config import settings
-from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType, ClipStatus
+from app.models.clip_models import Clip, ClipEdit, ClipJob, ClipJobStatus, ClipSourceType
 
 logger = logging.getLogger("flowmeta.clip_retention")
 
@@ -75,6 +75,9 @@ def job_artifact_paths(job: ClipJob, clips: list[Clip]) -> list[str]:
     paths: list[str] = []
     if job.source_type == ClipSourceType.UPLOAD:
         paths.append(job.source_ref)
+    image_paths = (job.params or {}).get("image_paths", [])
+    if isinstance(image_paths, list):
+        paths.extend(path for path in image_paths if isinstance(path, str))
     for clip in clips:
         if clip.output_ref:
             paths.append(clip.output_ref)
@@ -138,7 +141,6 @@ async def sweep_once(session_factory, *, now: datetime | None = None) -> dict:
         candidates = (
             await session.execute(
                 select(ClipJob)
-                .where(ClipJob.purged_at.is_(None))
                 .order_by(ClipJob.last_seen_at.asc())
                 .limit(SWEEP_BATCH)
             )
@@ -162,15 +164,18 @@ async def sweep_once(session_factory, *, now: datetime | None = None) -> dict:
                 await session.execute(select(Clip).where(Clip.job_id == job.id))
             ).scalars().all()
             files, freed = purge_job_files(job, clips)
-            for clip in clips:
-                if clip.status == ClipStatus.READY:
-                    clip.status = ClipStatus.PURGED
-                clip.output_ref = None
-            job.purged_at = now
+            clip_ids = [clip.id for clip in clips]
+            if clip_ids:
+                await session.execute(delete(ClipEdit).where(ClipEdit.clip_id.in_(clip_ids)))
+            await session.execute(delete(Clip).where(Clip.job_id == job.id))
+            await session.execute(delete(ClipJob).where(ClipJob.id == job.id))
             summary["purged"] += 1
             summary["files"] += files
             summary["bytes"] += freed
-            logger.info("purged job %s: %d files, %d bytes", job.id, files, freed)
+            logger.info(
+                "deleted expired job %s from storage and database: %d files, %d bytes",
+                job.id, files, freed,
+            )
 
         await session.commit()
 

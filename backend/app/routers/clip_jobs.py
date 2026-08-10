@@ -22,8 +22,10 @@ from app.services.clip_queue import build_clip_job, build_gen_job, enqueue_clip_
 from app.services.clip_retention import touch_jobs
 from app.services.clip_storage import (
     EmptyUpload,
+    UnsupportedImage,
     UploadTooLarge,
     sanitize_link,
+    save_gen_image_stream,
     save_upload_stream,
 )
 from app.services.peer_client import peer_available
@@ -168,6 +170,101 @@ async def create_gen_job(
         job.error = "Could not enqueue job"
         await session.commit()
         raise HTTPException(status_code=503, detail=f"Could not enqueue job: {exc}") from exc
+
+    return {"job_id": str(job.id), "status": job.status.value}
+
+
+@router.post("/api/gen-jobs/from-images", response_model=dict)
+async def create_gen_job_from_images(
+    prompt: str = Form(...),
+    duration_sec: int = Form(default=30),
+    negative_prompt: str = Form(default=""),
+    voice: str = Form(default=settings.TTS_DEFAULT_VOICE),
+    scoring_backend: str = Form(default=settings.SCORING_BACKEND),
+    images: list[UploadFile] = File(...),
+    user: User = Depends(require_permission("clip:create")),
+    session: AsyncSession = Depends(get_session),
+):
+    """User product images -> AI sales script -> animated vertical video."""
+    clean_prompt = prompt.strip()
+    if len(clean_prompt) < 10 or len(clean_prompt) > 2000:
+        raise HTTPException(status_code=400, detail="Prompt must contain 10 to 2000 characters")
+    if len(negative_prompt) > 1000:
+        raise HTTPException(status_code=400, detail="Negative prompt cannot exceed 1000 characters")
+    if not 5 <= duration_sec <= settings.GEN_MAX_DURATION_SEC:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Duration must be between 5 and {settings.GEN_MAX_DURATION_SEC} seconds",
+        )
+    if voice not in VOICES:
+        raise HTTPException(status_code=400, detail=f"Unknown voice: {voice}")
+    backend = (scoring_backend or settings.SCORING_BACKEND).strip().lower()
+    if backend not in SUPPORTED_BACKENDS:
+        raise HTTPException(
+            status_code=400,
+            detail="Gen video requires one of these AI backends: gemini, ollama, claude",
+        )
+    if not 1 <= len(images) <= settings.GEN_MAX_UPLOAD_IMAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Upload between 1 and {settings.GEN_MAX_UPLOAD_IMAGES} images",
+        )
+
+    saved_paths: list[str] = []
+    try:
+        for image in images:
+            try:
+                path = await save_gen_image_stream(
+                    str(user.id),
+                    image.filename or "product",
+                    image.content_type or "",
+                    image,
+                    max_bytes=settings.GEN_MAX_IMAGE_BYTES,
+                )
+                saved_paths.append(path)
+            except EmptyUpload as exc:
+                raise HTTPException(status_code=400, detail="Uploaded image is empty") from exc
+            except UnsupportedImage as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except UploadTooLarge as exc:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Each image must be at most {settings.GEN_MAX_IMAGE_BYTES} bytes",
+                ) from exc
+            finally:
+                await image.close()
+
+        job = ClipJob(
+            user_id=user.id,
+            source_type=ClipSourceType.PROMPT,
+            source_ref=clean_prompt,
+            params={
+                "duration_sec": duration_sec,
+                "negative_prompt": negative_prompt.strip(),
+                "voice": voice,
+                "scoring_backend": backend,
+                "image_paths": saved_paths,
+                "image_count": len(saved_paths),
+            },
+        )
+        session.add(job)
+        await session.commit()
+        await session.refresh(job)
+
+        try:
+            await enqueue_clip_job(build_gen_job(str(job.id)))
+        except Exception as exc:
+            job.status = ClipJobStatus.ERROR
+            job.error = "Could not enqueue job"
+            await session.commit()
+            raise HTTPException(status_code=503, detail=f"Could not enqueue job: {exc}") from exc
+    except BaseException:
+        for path in saved_paths:
+            try:
+                os.remove(path)
+            except FileNotFoundError:
+                pass
+        raise
 
     return {"job_id": str(job.id), "status": job.status.value}
 

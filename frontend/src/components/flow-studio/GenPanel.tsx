@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -22,12 +22,17 @@ import { useFlowSettings } from "./useFlowSettings";
 const SELECT_CLASS =
   "h-9 w-full rounded-md bg-foreground/5 px-3 text-sm text-foreground ring-1 ring-foreground/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const GEN_BACKENDS = ["gemini", "ollama", "claude"] as const;
+const GEN_DURATIONS = [15, 30, 60, 90, 120] as const;
+const MAX_IMAGES = 12;
+const MAX_IMAGE_BYTES = 15 * 1024 * 1024;
 type GenBackend = (typeof GEN_BACKENDS)[number];
 
 export function GenPanel({ onJobStarted }: { onJobStarted: (jobId: string) => void }) {
   const { settings } = useFlowSettings();
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const [prompt, setPrompt] = useState("");
   const [negativePrompt, setNegativePrompt] = useState("");
+  const [images, setImages] = useState<File[]>([]);
   const [durationSec, setDurationSec] = useState(30);
   const [voice, setVoice] = useState<VoiceId>(VOICE_OPTIONS[0].id);
   const [scriptBackend, setScriptBackend] = useState<GenBackend>(
@@ -52,6 +57,7 @@ export function GenPanel({ onJobStarted }: { onJobStarted: (jobId: string) => vo
         durationSec,
         voice,
         scoringBackend: scriptBackend,
+        images,
       });
       onJobStarted(result.job_id);
     } catch (err) {
@@ -83,6 +89,54 @@ export function GenPanel({ onJobStarted }: { onJobStarted: (jobId: string) => vo
           </div>
 
           <div className="space-y-2">
+            <Label htmlFor="gen-images">Ảnh sản phẩm (tùy chọn, tối đa 12 ảnh)</Label>
+            <Input
+              ref={imageInputRef}
+              id="gen-images"
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              multiple
+              onChange={(event) => {
+                const selected = Array.from(event.target.files ?? []);
+                if (selected.length > MAX_IMAGES) {
+                  setImages([]);
+                  setError(`Chỉ được tải tối đa ${MAX_IMAGES} ảnh.`);
+                  event.target.value = "";
+                  return;
+                }
+                if (selected.some((image) => image.size > MAX_IMAGE_BYTES)) {
+                  setImages([]);
+                  setError("Mỗi ảnh phải nhỏ hơn hoặc bằng 15 MB.");
+                  event.target.value = "";
+                  return;
+                }
+                setError(null);
+                setImages(selected);
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              Có ảnh: hệ thống dùng ảnh của bạn theo đúng thứ tự và tạo chuyển động pan/zoom.
+              Không có ảnh: hệ thống tự tìm ảnh theo từng cảnh.
+            </p>
+            {images.length > 0 && (
+              <div className="rounded-lg bg-foreground/5 px-3 py-2 text-xs text-muted-foreground">
+                <p className="font-medium text-foreground">Đã chọn {images.length} ảnh</p>
+                <p className="mt-1 truncate">{images.map((image) => image.name).join(" · ")}</p>
+                <button
+                  type="button"
+                  className="mt-2 text-destructive underline-offset-2 hover:underline"
+                  onClick={() => {
+                    setImages([]);
+                    if (imageInputRef.current) imageInputRef.current.value = "";
+                  }}
+                >
+                  Bỏ toàn bộ ảnh
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
             <Label htmlFor="gen-negative">Tránh nhắc đến (tuỳ chọn)</Label>
             <Textarea
               id="gen-negative"
@@ -104,6 +158,22 @@ export function GenPanel({ onJobStarted }: { onJobStarted: (jobId: string) => vo
                 value={durationSec}
                 onChange={(e) => setDurationSec(Number(e.target.value))}
               />
+              <div className="flex flex-wrap gap-1 pt-1">
+                {GEN_DURATIONS.map((seconds) => (
+                  <button
+                    key={seconds}
+                    type="button"
+                    className={`rounded px-2 py-1 text-[11px] ${
+                      durationSec === seconds
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-foreground/5 text-muted-foreground"
+                    }`}
+                    onClick={() => setDurationSec(seconds)}
+                  >
+                    {seconds}s
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="gen-voice">Giọng đọc</Label>

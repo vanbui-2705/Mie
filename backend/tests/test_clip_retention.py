@@ -6,19 +6,27 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType, ClipStatus
+from app.models.clip_models import (
+    Clip,
+    ClipEdit,
+    ClipEditSource,
+    ClipJob,
+    ClipJobStatus,
+    ClipSourceType,
+    ClipStatus,
+)
 from app.services import clip_retention
 
 
 @pytest.fixture()
 def upload_dir(tmp_path, monkeypatch) -> Path:
     monkeypatch.setattr(clip_retention.settings, "CLIP_UPLOAD_DIR", str(tmp_path))
-    monkeypatch.setattr(clip_retention.settings, "CLIP_SESSION_GRACE_SECONDS", 120)
+    monkeypatch.setattr(clip_retention.settings, "CLIP_SESSION_GRACE_SECONDS", 86_400)
     return tmp_path
 
 
 async def _job_with_files(
-    session, user_id, upload_dir: Path, *, status=ClipJobStatus.DONE, last_seen_minutes_ago=10,
+    session, user_id, upload_dir: Path, *, status=ClipJobStatus.DONE, last_seen_minutes_ago=1_500,
 ) -> tuple[ClipJob, list[Path]]:
     work_dir = upload_dir / str(user_id)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -42,9 +50,14 @@ async def _job_with_files(
     leftover = work_dir / f"{job.id}_clip_1_raw.mp4"
     leftover.write_bytes(b"raw")
 
-    session.add(Clip(
+    clip = Clip(
         job_id=job.id, rank=1, start_sec=0.0, end_sec=30.0,
         clipspec={"version": 2}, output_ref=str(clip_file), status=ClipStatus.READY,
+    )
+    session.add(clip)
+    await session.flush()
+    session.add(ClipEdit(
+        clip_id=clip.id, version=1, clipspec={"version": 2}, source=ClipEditSource.AUTO,
     ))
     job.last_seen_at = datetime.now(timezone.utc) - timedelta(minutes=last_seen_minutes_ago)
     await session.commit()
@@ -61,10 +74,11 @@ async def test_sweep_purges_files_of_a_dead_session(session, session_factory, us
     assert summary["bytes"] > 0
     assert [f for f in files if f.exists()] == []
 
-    await session.refresh(job)
-    assert job.purged_at is not None
-    clips = (await session.execute(select(Clip).where(Clip.job_id == job.id))).scalars().all()
-    assert all(c.status == ClipStatus.PURGED and c.output_ref is None for c in clips)
+    job_id = job.id
+    assert await session.get(ClipJob, job_id) is None
+    clips = (await session.execute(select(Clip).where(Clip.job_id == job_id))).scalars().all()
+    assert clips == []
+    assert (await session.execute(select(ClipEdit))).scalars().all() == []
 
 
 async def test_sweep_keeps_a_job_inside_the_grace_window(session, session_factory, user_id, upload_dir):
@@ -74,8 +88,7 @@ async def test_sweep_keeps_a_job_inside_the_grace_window(session, session_factor
 
     assert summary == {"cancelled": 0, "purged": 0, "files": 0, "bytes": 0}
     assert all(f.exists() for f in files)
-    await session.refresh(job)
-    assert job.purged_at is None
+    assert await session.get(ClipJob, job.id) is not None
 
 
 async def test_sweep_cancels_a_running_job_before_deleting_anything(
@@ -93,6 +106,7 @@ async def test_sweep_cancels_a_running_job_before_deleting_anything(
     second = await clip_retention.sweep_once(session_factory)
     assert second["purged"] == 1
     assert [f for f in files if f.exists()] == []
+    assert await session.get(ClipJob, job.id) is None
 
 
 async def test_sweep_does_not_purge_twice(session, session_factory, user_id, upload_dir):
@@ -110,14 +124,37 @@ async def test_sweep_keeps_a_link_job_source(session, session_factory, user_id, 
         status=ClipJobStatus.ERROR,
     )
     session.add(job)
-    job.last_seen_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+    job.last_seen_at = datetime.now(timezone.utc) - timedelta(minutes=1_500)
     await session.commit()
 
     summary = await clip_retention.sweep_once(session_factory)
     assert summary["purged"] == 1
     assert summary["files"] == 0
-    await session.refresh(job)
-    assert job.source_ref == "https://youtu.be/x"
+    assert await session.get(ClipJob, job.id) is None
+
+
+async def test_sweep_deletes_uploaded_gen_images(
+    session, session_factory, user_id, upload_dir,
+):
+    product = upload_dir / str(user_id) / "product.png"
+    product.parent.mkdir(parents=True, exist_ok=True)
+    product.write_bytes(b"\x89PNG\r\n\x1a\nproduct")
+    job = ClipJob(
+        user_id=user_id,
+        source_type=ClipSourceType.PROMPT,
+        source_ref="Kịch bản bán hàng đủ dài",
+        params={"image_paths": [str(product)]},
+        status=ClipJobStatus.DONE,
+    )
+    session.add(job)
+    job.last_seen_at = datetime.now(timezone.utc) - timedelta(minutes=1_500)
+    await session.commit()
+
+    summary = await clip_retention.sweep_once(session_factory)
+
+    assert summary["purged"] == 1
+    assert not product.exists()
+    assert await session.get(ClipJob, job.id) is None
 
 
 async def test_touch_jobs_refreshes_only_the_callers_jobs(session, user_id, upload_dir):

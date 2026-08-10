@@ -296,8 +296,8 @@ class ClipJobOut(BaseModel):
     source_type: str
     status: str
     error: str | None = None
-    # Set once the retention sweeper deleted the files. The rows survive, so the
-    # UI can say "cleaned up" instead of failing to play a missing video.
+    # Backward-compatible field for jobs cleaned by the previous file-only
+    # retention policy. New expired jobs are removed from the database.
     purged_at: datetime | None = None
     clips: list[ClipOut] = []
 
@@ -319,7 +319,7 @@ class ClipJobSummary(BaseModel):
 
 class ClipHeartbeat(BaseModel):
     """"These jobs are still on someone's screen." Anything not heartbeaten for
-    CLIP_SESSION_GRACE_SECONDS is deleted from disk."""
+    CLIP_SESSION_GRACE_SECONDS is deleted from storage and the database."""
 
     job_ids: list[uuid.UUID] = []
 

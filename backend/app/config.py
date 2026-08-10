@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     # longer than the grace window is deleted, so a refresh keeps its clips and
     # a closed tab does not fill the disk.
     CLIP_RETENTION_ENABLED: bool = True
-    CLIP_SESSION_GRACE_SECONDS: int = 120
+    CLIP_SESSION_GRACE_SECONDS: int = 24 * 60 * 60
     CLIP_SWEEP_INTERVAL_SECONDS: int = 60
     CLIP_CANCEL_POLL_SECONDS: int = 10
 
@@ -141,6 +141,8 @@ class Settings(BaseSettings):
     STOCK_TIMEOUT_SECONDS: float = 20.0
     GEN_SCENE_PAD_SEC: float = 0.4      # breath after each narration
     GEN_MAX_DURATION_SEC: int = 120
+    GEN_MAX_UPLOAD_IMAGES: int = 12
+    GEN_MAX_IMAGE_BYTES: int = 15 * 1024 * 1024
     FFMPEG_BIN: str = "ffmpeg"
     FFPROBE_BIN: str = "ffprobe"
     YTDLP_BIN: str = "yt-dlp"

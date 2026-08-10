@@ -4,8 +4,10 @@ import pytest
 
 from app.services.clip_storage import (
     EmptyUpload,
+    UnsupportedImage,
     UploadTooLarge,
     sanitize_link,
+    save_gen_image_stream,
     save_upload,
     save_upload_stream,
 )
@@ -84,5 +86,35 @@ async def test_save_upload_stream_rejects_an_empty_part(tmp_path, monkeypatch) -
 
     with pytest.raises(EmptyUpload):
         await save_upload_stream("user-1", "empty.mp4", FakeUpload(b""), max_bytes=1024)
+
+    assert list((tmp_path / "user-1").iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_save_gen_image_validates_and_preserves_a_real_png(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "CLIP_UPLOAD_DIR", str(tmp_path))
+    payload = b"\x89PNG\r\n\x1a\n" + b"image-data"
+
+    path = await save_gen_image_stream(
+        "user-1", "product.png", "image/png", FakeUpload(payload), max_bytes=1024,
+    )
+
+    assert Path(path).read_bytes() == payload
+    assert path.endswith(".png")
+
+
+@pytest.mark.asyncio
+async def test_save_gen_image_removes_spoofed_content(tmp_path, monkeypatch) -> None:
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "CLIP_UPLOAD_DIR", str(tmp_path))
+
+    with pytest.raises(UnsupportedImage):
+        await save_gen_image_stream(
+            "user-1", "fake.jpg", "image/jpeg", FakeUpload(b"<script>"),
+            max_bytes=1024,
+        )
 
     assert list((tmp_path / "user-1").iterdir()) == []

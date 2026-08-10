@@ -24,7 +24,12 @@ from app.services.ai_pipeline.stock_media import (
     pick_commons_photo_url,
     pick_photo_url,
 )
-from app.services.gen_runner import MIN_SCENE_SEC, build_cues, lay_out_scenes
+from app.services.gen_runner import (
+    MIN_SCENE_SEC,
+    build_cues,
+    lay_out_scenes,
+    uploaded_image_for_scene,
+)
 
 
 def _script(*narrations: str) -> VideoScript:
@@ -41,6 +46,11 @@ def test_scene_count_scales_with_duration_inside_the_bounds():
     assert scene_count_for(5) == 2      # floor
     assert scene_count_for(30) == 5
     assert scene_count_for(600) == 12   # ceiling
+
+
+def test_uploaded_images_raise_the_minimum_scene_count():
+    assert scene_count_for(30, minimum=8) == 8
+    assert scene_count_for(30, minimum=99) == 12
 
 
 def test_build_prompt_includes_the_topic_and_omits_an_empty_avoid_line():
@@ -115,6 +125,17 @@ def test_build_cues_stops_at_the_timeline_it_was_given():
     assert cues and all(end <= timeline.total + 0.001 for _s, end, _t in cues)
 
 
+def test_uploaded_images_are_spread_in_order_across_scenes():
+    images = ("product-front.jpg", "product-side.jpg", "product-use.jpg")
+    selected = [uploaded_image_for_scene(images, i, 6) for i in range(6)]
+    assert selected == [
+        "product-front.jpg", "product-front.jpg",
+        "product-side.jpg", "product-side.jpg",
+        "product-use.jpg", "product-use.jpg",
+    ]
+    assert uploaded_image_for_scene((), 0, 1) is None
+
+
 # ─── slideshow ────────────────────────────────────────────────────────────────
 
 def test_zoom_expression_alternates_direction():
@@ -144,7 +165,10 @@ def test_build_slideshow_command_concats_every_scene_and_burns_subtitles():
     assert "[v0][v1]concat=n=2:v=1:a=0[cat]" in graph
     assert "[cat]subtitles='/app/x.ass'" in graph
     assert cmd[cmd.index("-map") + 1] == "[out]"
-    assert cmd.count("-loop") == 2
+    # zoompan expands each single still to the requested frame count. Input
+    # looping would multiply that duration and prevent later scenes appearing.
+    assert "-loop" not in cmd
+    assert cmd.count("-i") == 2
     assert "-c:a" not in cmd
     assert cmd[-1] == "out.mp4"
 

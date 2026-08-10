@@ -51,6 +51,7 @@ class GenContext:
     duration_sec: float
     voice: str
     backend: str
+    image_paths: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,17 @@ def build_cues(
     return cues
 
 
+def uploaded_image_for_scene(
+    image_paths: tuple[str, ...], scene_index: int, scene_count: int
+) -> str | None:
+    """Spread ordered product images across the story without random jumps."""
+    if not image_paths:
+        return None
+    count = max(1, scene_count)
+    image_index = min(len(image_paths) - 1, scene_index * len(image_paths) // count)
+    return image_paths[image_index]
+
+
 class GenRunner:
     PIPELINE_VERSION = "gen-v1"
 
@@ -123,6 +135,10 @@ class GenRunner:
                 duration_sec=float(params.get("duration_sec", 30)),
                 voice=str(params.get("voice", settings.TTS_DEFAULT_VOICE)),
                 backend=str(params.get("scoring_backend", settings.SCORING_BACKEND)),
+                image_paths=tuple(
+                    path for path in params.get("image_paths", [])
+                    if isinstance(path, str) and path
+                ),
             )
 
     async def _set_phase(self, ctx: GenContext, status: ClipJobStatus, phase: str) -> None:
@@ -205,6 +221,7 @@ class GenRunner:
                 duration_sec=ctx.duration_sec,
                 backend=ctx.backend,
                 negative_prompt=ctx.negative_prompt,
+                minimum_scenes=len(ctx.image_paths),
             )
 
             # ---- SCORING: voice first, then the timeline it implies ----
@@ -222,17 +239,28 @@ class GenRunner:
 
             self._abort_point(ctx)
             backdrops: list[tuple[str, float]] = []
+            visual_sources: list[str] = []
             for i, scene in enumerate(script.scenes):
-                image = await resolve_backdrop(scene.image_query, work_dir, base, i)
+                image = uploaded_image_for_scene(ctx.image_paths, i, len(script.scenes))
+                visual_source = "uploaded" if image else ""
+                if image and not os.path.isfile(image):
+                    raise RuntimeError(f"uploaded image is missing for scene {i + 1}")
+                if image is None:
+                    image = await resolve_backdrop(scene.image_query, work_dir, base, i)
+                    visual_source = backdrop_source(image) if image else ""
                 if image is None:
                     raise RuntimeError(f"could not obtain a backdrop for scene {i + 1}")
-                temp_paths.append(image)
+                if visual_source != "uploaded":
+                    temp_paths.append(image)
                 backdrops.append((image, timeline.durations[i]))
+                visual_sources.append(visual_source)
 
             # ---- RENDERING ----
             self._abort_point(ctx)
             await self._set_phase(ctx, ClipJobStatus.RENDERING, "rendering")
-            row = await self._render(ctx, script, timeline, tracks, backdrops, work_dir, temp_paths)
+            row = await self._render(
+                ctx, script, timeline, tracks, backdrops, visual_sources, work_dir, temp_paths
+            )
             await self._save_clip(ctx, row)
             await self._finish(ctx)
         finally:
@@ -251,6 +279,7 @@ class GenRunner:
         timeline: Timeline,
         tracks: list[tuple[str, float]],
         backdrops: list[tuple[str, float]],
+        visual_sources: list[str],
         work_dir: Path,
         temp_paths: list[str],
     ) -> dict:
@@ -326,7 +355,7 @@ class GenRunner:
                         "duration": timeline.durations[i],
                         "narration": scene.narration,
                         "image_query": scene.image_query,
-                        "visual_source": backdrop_source(backdrops[i][0]),
+                        "visual_source": visual_sources[i],
                     }
                     for i, scene in enumerate(script.scenes)
                     if i < len(timeline.starts)

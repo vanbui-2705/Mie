@@ -14,6 +14,11 @@ from app.config import settings
 # throughput, small enough that a 4 GB upload never costs more than one chunk
 # of resident memory.
 UPLOAD_CHUNK_BYTES = 4 * 1024 * 1024
+GEN_IMAGE_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
 
 
 class UploadTooLarge(Exception):
@@ -22,6 +27,10 @@ class UploadTooLarge(Exception):
 
 class EmptyUpload(Exception):
     """The client sent a file part with no bytes in it."""
+
+
+class UnsupportedImage(Exception):
+    """The uploaded part is not a supported image or its bytes are spoofed."""
 
 
 class ChunkReader(Protocol):
@@ -95,3 +104,44 @@ async def save_upload_stream(
         path.unlink(missing_ok=True)
         raise
     return str(path)
+
+
+def _matches_image_header(header: bytes, content_type: str) -> bool:
+    if content_type == "image/jpeg":
+        return header.startswith(b"\xff\xd8\xff")
+    if content_type == "image/png":
+        return header.startswith(b"\x89PNG\r\n\x1a\n")
+    if content_type == "image/webp":
+        return len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+    return False
+
+
+def _read_header(path: str, size: int = 16) -> bytes:
+    with open(path, "rb") as handle:
+        return handle.read(size)
+
+
+async def save_gen_image_stream(
+    user_id: str,
+    filename: str,
+    content_type: str,
+    upload: ChunkReader,
+    *,
+    max_bytes: int,
+) -> str:
+    """Validate and stream one user-supplied Gen image to job storage."""
+    media_type = (content_type or "").split(";", 1)[0].strip().lower()
+    suffix = GEN_IMAGE_TYPES.get(media_type)
+    if suffix is None:
+        raise UnsupportedImage("Only JPEG, PNG and WebP images are supported")
+
+    safe_name = f"{Path(filename or 'product').stem}{suffix}"
+    path = await save_upload_stream(user_id, safe_name, upload, max_bytes=max_bytes)
+    try:
+        header = await asyncio.to_thread(_read_header, path)
+        if not _matches_image_header(header, media_type):
+            raise UnsupportedImage("Uploaded image content does not match its file type")
+    except BaseException:
+        await asyncio.to_thread(Path(path).unlink, missing_ok=True)
+        raise
+    return path

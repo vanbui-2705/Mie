@@ -6,6 +6,7 @@ import uuid
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from app.auth import create_token
 from app.db.postgres import get_session
@@ -410,3 +411,45 @@ async def test_gen_job_rejects_heuristic_backend(client, session) -> None:
 
     assert response.status_code == 400
     assert "requires one of these AI backends" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_gen_job_from_images_saves_ordered_product_images(
+    client, session, tmp_path, monkeypatch,
+) -> None:
+    from app.config import settings
+    from app.routers import clip_jobs
+
+    user = await _make_user(session, "gen-images")
+    monkeypatch.setattr(settings, "CLIP_UPLOAD_DIR", str(tmp_path))
+
+    async def fake_enqueue(_payload):
+        return 1
+
+    monkeypatch.setattr(clip_jobs, "enqueue_clip_job", fake_enqueue)
+    png = b"\x89PNG\r\n\x1a\n" + b"product"
+    response = await client.post(
+        "/api/gen-jobs/from-images",
+        headers=_auth(user),
+        data={
+            "prompt": "Tạo video bán sản phẩm chăm sóc da dịu nhẹ",
+            "duration_sec": "60",
+            "voice": "vi-female",
+            "scoring_backend": "gemini",
+        },
+        files=[
+            ("images", ("front.png", png, "image/png")),
+            ("images", ("detail.png", png + b"-detail", "image/png")),
+        ],
+    )
+
+    assert response.status_code == 200
+    job = (
+        await session.execute(
+            select(ClipJob).where(ClipJob.id == uuid.UUID(response.json()["job_id"]))
+        )
+    ).scalar_one()
+    assert job.params["image_count"] == 2
+    assert [path.rsplit("_", 1)[-1] for path in job.params["image_paths"]] == [
+        "front.png", "detail.png",
+    ]

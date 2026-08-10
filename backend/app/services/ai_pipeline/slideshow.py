@@ -60,8 +60,13 @@ def build_slideshow_command(
         raise ValueError("a slideshow needs at least one image")
 
     cmd: list[str] = [settings.FFMPEG_BIN, "-y"]
-    for path, seconds in images:
-        cmd += ["-loop", "1", "-t", f"{max(0.1, seconds):.3f}", "-i", path]
+    # A still-image input already contains exactly one frame. `zoompan` expands
+    # that frame to the scene duration through its `d=frames` setting. Looping
+    # the input here would feed many copies of the same frame into zoompan, and
+    # every copy would expand again; scene one would then outlast the complete
+    # video and hide every later scene.
+    for path, _seconds in images:
+        cmd += ["-i", path]
     if audio_path:
         cmd += ["-i", audio_path]
 

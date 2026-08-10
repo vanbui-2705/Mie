@@ -58,13 +58,20 @@ class VideoScript:
         return [scene.narration for scene in self.scenes]
 
 
-def scene_count_for(duration_sec: float) -> int:
+def scene_count_for(duration_sec: float, *, minimum: int = MIN_SCENES) -> int:
     """One scene per ~6 seconds — long enough to read, short enough to move."""
-    return max(MIN_SCENES, min(MAX_SCENES, int(round(duration_sec / 6.0))))
+    target = max(int(round(duration_sec / 6.0)), minimum)
+    return max(MIN_SCENES, min(MAX_SCENES, target))
 
 
-def build_prompt(prompt: str, *, duration_sec: float, negative_prompt: str = "") -> str:
-    scenes = scene_count_for(duration_sec)
+def build_prompt(
+    prompt: str,
+    *,
+    duration_sec: float,
+    negative_prompt: str = "",
+    minimum_scenes: int = MIN_SCENES,
+) -> str:
+    scenes = scene_count_for(duration_sec, minimum=minimum_scenes)
     avoid = f"Avoid: {negative_prompt.strip()}\n" if negative_prompt.strip() else ""
     return _PROMPT.format(
         prompt=prompt.strip(),
@@ -110,10 +117,20 @@ def parse_script(payload: object, *, duration_sec: float) -> VideoScript:
 
 
 async def write_script(
-    prompt: str, *, duration_sec: float, backend: str, negative_prompt: str = ""
+    prompt: str,
+    *,
+    duration_sec: float,
+    backend: str,
+    negative_prompt: str = "",
+    minimum_scenes: int = MIN_SCENES,
 ) -> VideoScript:
     payload = await query_llm(
-        build_prompt(prompt, duration_sec=duration_sec, negative_prompt=negative_prompt),
+        build_prompt(
+            prompt,
+            duration_sec=duration_sec,
+            negative_prompt=negative_prompt,
+            minimum_scenes=minimum_scenes,
+        ),
         backend=backend,
     )
     return parse_script(payload, duration_sec=duration_sec)
