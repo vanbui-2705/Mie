@@ -1,5 +1,17 @@
 # Agent Rules
 
+## Architecture Discovery
+
+- Read `ARCHITECTURE.md` before changing project behavior.
+- Use `docs/architecture/MODULES.md` to locate the owning functional module.
+- Read the module's `ARCHITECTURE.md`, listed entrypoints, invariants and tests
+  before editing implementation files.
+- Keep changes inside the owning module unless cross-module impact is stated.
+- Architecture documentation uses Markdown only. Do not introduce YAML or YML
+  module manifests.
+- Update the owning architecture document when module boundaries, contracts,
+  data ownership, runtime entrypoints or debugging instructions change.
+
 ## Progress Reporting
 
 - After every task or phase, report progress before moving on.

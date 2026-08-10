@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import { TaskConfigForm } from "@/components/auto-comment/TaskConfigForm";
-import { LogConsole } from "@/components/auto-comment/LogConsole";
-import { StatsBar } from "@/components/auto-comment/StatsBar";
+import { LogConsole, StatsBar, TaskConfigForm } from "@/features/automation";
 import { SectionEyebrow } from "@/components/shared/SectionEyebrow";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api-client";

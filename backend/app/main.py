@@ -27,11 +27,16 @@ from app.db.postgres import close_db, get_session, session_context
 from app.db.redis import close_redis
 from app.event_bus import event_bus
 from app.models.sqlmodels import FacebookAccount, Profile, UserStatus
-from app.routers import auth, auth_oauth, browser_sessions, comment_tasks, extension_connector, facebook_accounts, facebook_oauth, google_sheets, graph, health, page_tasks, profiles, proxy, rental, roles, scheduled_posts, sheet_campaigns, settings as settings_router, tasks
-from app.services.profile_manager import ProfileManager
-from app.services.proxy_manager import ProxyManager
-from app.services.scheduled_post_service import enqueue_due_posts
-from app.services.task_runner import TaskRunner
+from app.modules.automation import api as automation_api
+from app.modules.automation.runtime import TaskRunner, enqueue_due_posts
+from app.modules.browser import api as browser_api
+from app.modules.facebook import api as facebook_api
+from app.modules.identity_access import api as identity_api
+from app.modules.platform import api as platform_api
+from app.modules.proxy_profiles import api as proxy_profiles_api
+from app.modules.proxy_profiles.runtime import ProfileManager, ProxyManager
+from app.modules.rental import api as rental_api
+from app.modules.sheets import api as sheets_api
 from sqlalchemy import func, select
 
 
@@ -58,8 +63,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.task_runner = runner
 
     # wire singletons into router modules
-    tasks._task_runner = runner
-    proxy._proxy_manager = pm
+    automation_api.tasks._task_runner = runner
+    proxy_profiles_api.proxy._proxy_manager = pm
     scheduler_task = asyncio.create_task(_scheduler_tick()) if settings.SCHEDULER_ENABLED else None
     app.state.scheduler_task = scheduler_task
     # app.worker publishes from its own process; without this relay none of its
@@ -204,25 +209,25 @@ app.add_middleware(
 
 # ─── Route registration ────────────────────────────────────────────────────────
 
-app.include_router(health.router)
-app.include_router(auth.router)
-app.include_router(auth_oauth.router)
-app.include_router(roles.router)
-app.include_router(browser_sessions.router)
-app.include_router(profiles.router)
-app.include_router(facebook_accounts.router)
-app.include_router(facebook_oauth.router)
-app.include_router(comment_tasks.router)
-app.include_router(tasks.router)
-app.include_router(page_tasks.router)
-app.include_router(scheduled_posts.router)
-app.include_router(google_sheets.router)
-app.include_router(sheet_campaigns.router)
-app.include_router(rental.router)
-app.include_router(extension_connector.router)
-app.include_router(proxy.router)
-app.include_router(graph.router)
-app.include_router(settings_router.router)
+app.include_router(platform_api.health.router)
+app.include_router(identity_api.auth.router)
+app.include_router(identity_api.auth_oauth.router)
+app.include_router(identity_api.roles.router)
+app.include_router(browser_api.browser_sessions.router)
+app.include_router(proxy_profiles_api.profiles.router)
+app.include_router(facebook_api.facebook_accounts.router)
+app.include_router(facebook_api.facebook_oauth.router)
+app.include_router(automation_api.comment_tasks.router)
+app.include_router(automation_api.tasks.router)
+app.include_router(automation_api.page_tasks.router)
+app.include_router(automation_api.scheduled_posts.router)
+app.include_router(sheets_api.google_sheets.router)
+app.include_router(sheets_api.sheet_campaigns.router)
+app.include_router(rental_api.rental.router)
+app.include_router(browser_api.extension_connector.router)
+app.include_router(proxy_profiles_api.proxy.router)
+app.include_router(facebook_api.graph.router)
+app.include_router(platform_api.settings_router.router)
 
 
 # ─── Unified SSE endpoint ──────────────────────────────────────────────────────

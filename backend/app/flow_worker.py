@@ -14,10 +14,7 @@ from app.config import settings
 from app.db.postgres import close_db, session_context
 from app.db.redis import close_redis
 from app.event_bus import event_bus
-from app.services.clip_queue import dequeue_clip_job
-from app.services.clip_retention import sweep_once
-from app.services.clip_runner import ClipRunner
-from app.services.gen_runner import GenRunner
+from app.modules.flow_video.runtime import ClipRunner, GenRunner, dequeue_clip_job, sweep_once
 
 logger = logging.getLogger("flowmeta.flow_worker")
 
@@ -38,7 +35,7 @@ async def process_clip_job(job: dict) -> bool:
 
 
 async def run_retention_sweeper() -> None:
-    """Delete the artefacts of jobs whose browser session is gone.
+    """Delete expired job artefacts and database records.
 
     Lives in the worker, not the API: it is the only Flow process guaranteed to
     be single-instance, and the API must never block a request on disk I/O.

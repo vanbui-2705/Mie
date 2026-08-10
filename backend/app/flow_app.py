@@ -15,7 +15,8 @@ from app.config import settings
 from app.db.postgres import close_db
 from app.db.redis import close_redis
 from app.event_bus import event_bus
-from app.routers import clip_jobs, health
+from app.modules.flow_video import api as flow_video_api
+from app.modules.platform import api as platform_api
 from app.sse import register_sse_endpoint
 
 
@@ -45,6 +46,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(health.router)
-app.include_router(clip_jobs.router)
+app.include_router(platform_api.health.router)
+app.include_router(flow_video_api.clip_jobs.router)
 register_sse_endpoint(app, channels_default="clip")

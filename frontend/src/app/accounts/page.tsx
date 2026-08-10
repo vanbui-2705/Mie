@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { BulkImportDialog } from "@/components/accounts/BulkImportDialog";
+import { BulkImportDialog } from "@/features/accounts";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { SectionEyebrow } from "@/components/shared/SectionEyebrow";

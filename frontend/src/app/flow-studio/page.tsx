@@ -3,14 +3,18 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { SectionEyebrow } from "@/components/shared/SectionEyebrow";
-import { FlowSidebar, FLOW_TABS, type FlowTab } from "@/components/flow-studio/FlowSidebar";
-import { ReupPanel } from "@/components/flow-studio/ReupPanel";
-import { GenPanel } from "@/components/flow-studio/GenPanel";
-import { HistoryPanel } from "@/components/flow-studio/HistoryPanel";
-import { SettingsPanel } from "@/components/flow-studio/SettingsPanel";
-import { JobProgress } from "@/components/flow-studio/JobProgress";
-import { ResultGallery } from "@/components/flow-studio/ResultGallery";
-import { useSessionHeartbeat } from "@/components/flow-studio/useSessionHeartbeat";
+import {
+  FLOW_TABS,
+  FlowSidebar,
+  GenPanel,
+  HistoryPanel,
+  JobProgress,
+  ResultGallery,
+  ReupPanel,
+  SettingsPanel,
+  useSessionHeartbeat,
+  type FlowTab,
+} from "@/features/flow-studio";
 import { describeFlowError, getClipJob, type ClipJob } from "@/lib/flow-api";
 
 function isTab(value: string | null): value is FlowTab {

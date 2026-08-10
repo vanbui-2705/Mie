@@ -2,8 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { ProxyGrid } from "@/components/proxy/ProxyGrid";
-import { ProxyControls } from "@/components/proxy/ProxyControls";
+import { ProxyControls, ProxyGrid } from "@/features/proxy-profiles";
 import { SectionEyebrow } from "@/components/shared/SectionEyebrow";
 import { Trash2, Play, Square } from "lucide-react";
 import { apiFetch } from "@/lib/api-client";

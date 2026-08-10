@@ -12,9 +12,17 @@ from app.event_bus import event_bus
 from sqlalchemy import select
 
 from app.models.sqlmodels import FacebookAccount, PublicationJob, ShareTarget, TaskItem, TaskItemStatus, TaskLog, TaskRun, TaskRunStatus
-from app.services.browser_profiles import profile_path
-from app.services.personal_browser import post_to_group, post_to_timeline, share_to_target
-from app.services.task_queue import acquire_browser_account_lock, dequeue_browser_job, release_browser_account_lock
+from app.modules.automation.runtime import (
+    acquire_browser_account_lock,
+    dequeue_browser_job,
+    release_browser_account_lock,
+)
+from app.modules.browser.runtime import (
+    post_to_group,
+    post_to_timeline,
+    profile_path,
+    share_to_target,
+)
 
 logger = logging.getLogger("flowmeta.browser_worker")
 

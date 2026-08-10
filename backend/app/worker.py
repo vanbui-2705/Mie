@@ -12,9 +12,8 @@ from app.db.redis import close_redis
 from app.event_bus import event_bus
 from app.models.sqlmodels import TaskItem, TaskItemStatus, TaskRun, TaskRunStatus
 from app.schemas import DelaySettingsDTO
-from app.services.proxy_manager import ProxyManager
-from app.services.task_queue import dequeue_task
-from app.services.task_runner import TaskRunner
+from app.modules.automation.runtime import TaskRunner, dequeue_task
+from app.modules.proxy_profiles.runtime import ProxyManager
 from sqlalchemy import select
 
 logger = logging.getLogger("flowmeta.worker")
