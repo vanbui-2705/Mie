@@ -11,6 +11,7 @@ doing it once keeps a 60s video inside a minute of CPU.
 from __future__ import annotations
 
 from app.config import settings
+from app.services.ai_pipeline.scheduling import ffmpeg_threads
 
 OUTPUT_W = 1080
 OUTPUT_H = 1920
@@ -90,6 +91,7 @@ def build_slideshow_command(
         "-r", str(FPS),
         # A partial narration must not cut off later visual scenes.
         "-t", f"{total_sec:.3f}",
+        "-threads", str(ffmpeg_threads()),
         "-movflags", "+faststart",
         output_path,
     ]

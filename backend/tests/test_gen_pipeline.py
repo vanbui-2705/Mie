@@ -188,6 +188,23 @@ def test_build_slideshow_command_maps_the_voice_track_after_the_images():
     assert cmd[cmd.index("-t", cmd.index("-filter_complex")) + 1] == "5.000"
 
 
+def test_build_slideshow_command_pins_the_thread_count(monkeypatch):
+    from app.services.ai_pipeline import scheduling
+
+    monkeypatch.setattr(scheduling.settings, "FLOW_CPU_SLOTS", 2)
+    monkeypatch.setattr(scheduling.os, "cpu_count", lambda: 8)
+
+    cmd = build_slideshow_command(
+        [("a.jpg", 3.0)],
+        "out.mp4",
+        audio_path=None,
+        ass_path="s.ass",
+        font_dir="/fonts",
+        escape_path=lambda p: p,
+    )
+    assert cmd[cmd.index("-threads") + 1] == "4"
+
+
 def test_build_slideshow_command_rejects_an_empty_script():
     with pytest.raises(ValueError):
         build_slideshow_command(

@@ -13,6 +13,7 @@ from typing import Any
 
 from app.config import settings
 from app.services.ai_pipeline import procs
+from app.services.ai_pipeline.scheduling import ffmpeg_threads
 
 logger = logging.getLogger("flowmeta.ai_pipeline.renderer")
 
@@ -74,6 +75,7 @@ def build_render_command(
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-b:a", "128k",
+        "-threads", str(ffmpeg_threads()),
         "-movflags", "+faststart",
         output_path,
     ]

@@ -54,3 +54,18 @@ def test_build_render_command_chains_crop_scale_and_subtitles():
     assert cmd[cmd.index("-preset") + 1] == "veryfast"
     assert cmd[cmd.index("-c:a") + 1] == "aac"
     assert cmd[-1] == "out.mp4"
+
+
+def test_build_render_command_pins_the_thread_count(monkeypatch):
+    # Concurrent encodes that each take every core are slower than sequential
+    # ones. The slot count decides how many threads each process may use.
+    from app.services.ai_pipeline import scheduling
+
+    monkeypatch.setattr(scheduling.settings, "FLOW_CPU_SLOTS", 4)
+    monkeypatch.setattr(scheduling.os, "cpu_count", lambda: 8)
+
+    cmd = build_render_command(
+        "in.mp4", "out.mp4", crop=CROP, ass_path="s.ass", font_dir="/fonts"
+    )
+    assert "-threads" in cmd
+    assert cmd[cmd.index("-threads") + 1] == "2"
