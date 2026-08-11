@@ -97,7 +97,11 @@ function FlowStudio() {
   const isFinished =
     job?.status === "DONE" || job?.status === "ERROR" || job?.status === "CANCELLED";
 
-  const result = activeJobId && tab !== "settings" && (
+  // Rendered in one fixed spot in the tree and only moved with CSS. Rendering it
+  // under one tab and again under another made React unmount and rebuild it on
+  // every tab change: the card lost the phase it had reached, reconnected the
+  // stream and restarted at "Đang chờ 5%" while the job was already transcribing.
+  const result = activeJobId && (
     <div className="space-y-4">
       {!isFinished && <JobProgress key={activeJobId} jobId={activeJobId} onFinished={setJob} />}
       {jobError && (
@@ -147,17 +151,25 @@ function FlowStudio() {
       <div className="grid gap-4 lg:grid-cols-[220px_1fr]">
         <FlowSidebar active={tab} onSelect={selectTab} />
 
-        <div className="space-y-4">
+        <div className="flex flex-col gap-4">
           {/* Opened from the list, the result goes above it — under a 30-row
-              history nothing visible happened when you pressed "Mở". */}
-          {tab === "history" && result}
+              history nothing visible happened when you pressed "Mở". Order, not
+              placement: see the comment on `result`. */}
+          <div
+            className={[
+              tab === "history" ? "order-1" : "order-2",
+              tab === "settings" ? "hidden" : "",
+            ].join(" ")}
+          >
+            {result}
+          </div>
 
-          {tab === "reup" && <ReupPanel onJobStarted={selectJob} onGoTo={selectTab} />}
-          {tab === "gen" && <GenPanel onJobStarted={selectJob} />}
-          {tab === "history" && <HistoryPanel onOpenJob={selectJob} />}
-          {tab === "settings" && <SettingsPanel />}
-
-          {tab !== "history" && result}
+          <div className={tab === "history" ? "order-2" : "order-1"}>
+            {tab === "reup" && <ReupPanel onJobStarted={selectJob} onGoTo={selectTab} />}
+            {tab === "gen" && <GenPanel onJobStarted={selectJob} />}
+            {tab === "history" && <HistoryPanel onOpenJob={selectJob} />}
+            {tab === "settings" && <SettingsPanel />}
+          </div>
         </div>
       </div>
     </div>
