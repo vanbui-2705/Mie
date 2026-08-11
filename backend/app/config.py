@@ -114,10 +114,12 @@ class Settings(BaseSettings):
     ASR_COMPUTE_TYPE: str = "int8"
     ASR_CPU_THREADS: int = 8
     ASR_BEAM_SIZE: int = 1
-    # 0 disables batching and restores the one-region-at-a-time path. Batched
-    # decoding can shift word timestamps slightly, so it must be switchable
-    # off without a code change.
-    ASR_BATCH_SIZE: int = 8
+    # 0 disables batching and restores the one-region-at-a-time path, which is
+    # the default: BatchedInferencePipeline needs faster-whisper >= 1.1, and on
+    # this machine every 1.2.1 configuration measured slower than 1.0.3
+    # sequential (51s / 76s / 69s median over a 10-minute slice, 3 reps each).
+    # Raise it only together with a version bump that benchmarks better.
+    ASR_BATCH_SIZE: int = 0
     SCORING_BACKEND: str = "gemini"     # gemini | ollama | claude | heuristic
     CLIP_PREFILTER_MAX_REGIONS: int = 30
     CLIP_PREFILTER_MIN_REGION_SEC: float = 20.0
