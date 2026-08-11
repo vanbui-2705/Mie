@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.postgres import get_session
 from app.main import app
-from app.routers.auth_oauth import _state
 
 
 @pytest.mark.asyncio
@@ -75,10 +74,15 @@ async def test_oauth_success_creates_session_redirect(session: AsyncSession, mon
 
     monkeypatch.setattr("app.routers.auth_oauth._fetch_identity", fake_identity)
     monkeypatch.setattr("app.routers.auth_oauth.settings.AUTH_FRONTEND_CALLBACK_URL", "http://localhost:3001/auth/callback")
+    monkeypatch.setattr("app.routers.auth_oauth.settings.AUTH_GOOGLE_CLIENT_ID", "google-id")
     app.dependency_overrides[get_session] = override_session
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get("/api/auth/oauth/google/callback", params={"code": "valid-code", "state": _state("google")})
+            # Through /start, so the browser carries the state cookie the
+            # callback now demands. See test_auth_oauth_hardening.
+            started = await client.get("/api/auth/oauth/google/start", follow_redirects=False)
+            state = started.headers["location"].split("state=", 1)[1].split("&", 1)[0]
+            response = await client.get("/api/auth/oauth/google/callback", params={"code": "valid-code", "state": state})
             assert response.status_code == 307
             assert response.headers["location"].startswith("http://localhost:3001/auth/callback#token=")
             assert "&user=" in response.headers["location"]
