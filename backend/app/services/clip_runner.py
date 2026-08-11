@@ -343,6 +343,10 @@ class ClipRunner:
                 rows = list(
                     await asyncio.gather(*(render_and_tick(s) for s in segments))
                 )
+            # The render loop checked this between clips; gathering removed that
+            # seam, and without it a job cancelled mid-render ends DONE - every
+            # clip fails, and `_finish` overwrites CANCELLED anyway.
+            self._abort_point(ctx)
             await self._save_clips(ctx, rows)
             await self._finish(ctx)
         finally:

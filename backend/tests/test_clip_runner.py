@@ -439,3 +439,60 @@ async def test_phase_events_carry_progress(session, session_factory, user_id, fa
     for _channel, _kind, body in phase_events:
         if "progress" in body:
             assert 0.0 <= body["progress"] <= 1.0
+
+
+async def test_a_cancelled_render_does_not_block_the_next_job(
+    session, session_factory, user_id, fake_pipeline, monkeypatch
+):
+    """The one check that catches a leaked CPU permit.
+
+    The sweeper cancels the job while a render holds the slot, exactly as it
+    does when the browser tab goes away mid-encode. If the permit is not
+    returned, the next job waits on it forever - and that failure is silent, so
+    it surfaces days later as "Flow is hung". One slot makes the leak fatal
+    instead of merely slow, and the timeout turns the hang into an assertion.
+    """
+    from app.services.ai_pipeline import scheduling
+
+    monkeypatch.setattr(scheduling.settings, "FLOW_CPU_SLOTS", 1)
+    scheduling.reset_slots()
+
+    async def publish(channel, event_type, data):
+        return None
+
+    first = await _make_job(session, user_id)
+    runner = runner_mod.ClipRunner(session_factory=session_factory, publish=publish)
+
+    async def cancelled_burn(input_path, output_path, **kwargs):
+        # Holding the slot when the cancel lands: the sweeper writes CANCELLED
+        # and kills ffmpeg, which surfaces here as a failed encode.
+        async with session_factory() as s:
+            job = (await s.execute(select(ClipJob).where(ClipJob.id == first.id))).scalar_one()
+            job.status = ClipJobStatus.CANCELLED
+            await s.commit()
+        runner._cancelled = True
+        raise RuntimeError("ffmpeg killed")
+
+    monkeypatch.setattr(runner_mod, "burn_vertical", cancelled_burn)
+    await runner.run(str(first.id))
+
+    await session.refresh(first)
+    assert first.status == ClipJobStatus.CANCELLED  # not overwritten with DONE
+    clips = (await session.execute(select(Clip).where(Clip.job_id == first.id))).scalars().all()
+    assert clips == []
+
+    # Only the burn goes back to normal: monkeypatch.undo() would also unwind
+    # the fake_pipeline fixture and send the second job at real yt-dlp.
+    async def working_burn(input_path, output_path, **kwargs):
+        Path(output_path).write_bytes(b"rendered")
+        return True
+
+    monkeypatch.setattr(runner_mod, "burn_vertical", working_burn)
+
+    second = await _make_job(session, user_id)
+    await asyncio.wait_for(
+        runner_mod.ClipRunner(session_factory=session_factory, publish=publish).run(str(second.id)),
+        timeout=15,
+    )
+    await session.refresh(second)
+    assert second.status == ClipJobStatus.DONE
