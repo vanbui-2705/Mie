@@ -49,12 +49,15 @@ async def test_admin_can_create_list_update_and_delete_users(session: AsyncSessi
             assert listed.status_code == 200
             assert {row["username"] for row in listed.json()} == {"admin", "operator"}
 
+            # Promoted to manager, not admin: an admin may not edit or delete a
+            # peer of equal rank, so promoting to admin here would (correctly)
+            # lock the rest of this flow out. See test_auth_privilege_escalation.
             updated = await client.patch(
                 f"/api/auth/users/{created_body['id']}",
-                json={"role": "admin", "status": "disabled", "password": "newpass123"},
+                json={"role": "manager", "status": "disabled", "password": "newpass123"},
             )
             assert updated.status_code == 200
-            assert updated.json()["role"] == "admin"
+            assert updated.json()["role"] == "manager"
             assert updated.json()["status"] == "disabled"
 
             deleted = await client.delete(f"/api/auth/users/{created_body['id']}")

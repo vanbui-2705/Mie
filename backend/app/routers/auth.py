@@ -16,9 +16,38 @@ from app.db.postgres import get_session
 from app.config import settings
 from app.models.sqlmodels import PasswordResetToken, Role, User, UserRole, UserStatus
 from app.rbac import has_permission, require_permission
+from app.rbac_catalog import role_rank
 from app.services.permission_service import permission_codes_for_user, role_codes_for_user
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+ASSIGNABLE_ROLES = {"super_admin", "admin", "manager", "staff", "user"}
+
+
+def _guard_target_rank(actor: User, target: User) -> None:
+    """Refuse to touch an account that ranks at or above the caller's own.
+
+    `user:update` is permission to administer users, not permission to become
+    one of them. Equal rank counts as a takeover as well: two admins hold the
+    same powers, so letting either overwrite the other's password just moves
+    the account between people.
+    """
+    if str(actor.id) == str(target.id):
+        return
+    if role_rank(target.role) >= role_rank(actor.role):
+        raise HTTPException(
+            status_code=403,
+            detail="Không thể thao tác trên tài khoản ngang hoặc cao quyền hơn bạn",
+        )
+
+
+def _guard_assigned_rank(actor: User, role: str) -> None:
+    """No one hands out a role stronger than the one they hold."""
+    if role_rank(role) > role_rank(actor.role):
+        raise HTTPException(
+            status_code=403,
+            detail="Không thể gán vai trò cao hơn vai trò của bạn",
+        )
 
 
 @router.get("/me", response_model=dict)
@@ -189,12 +218,13 @@ async def create_user(
         raise HTTPException(status_code=400, detail="username is required")
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="password must be at least 6 characters")
-    if role not in {"super_admin", "admin", "manager", "staff", "user"}:
+    if role not in ASSIGNABLE_ROLES:
         raise HTTPException(status_code=400, detail="Unknown role")
     if role != "user" and not await has_permission(session, user, "permission:assign"):
         raise HTTPException(status_code=403, detail="Missing permission: permission:assign")
     if role == "super_admin" and not await has_permission(session, user, "tenant:manage:any"):
         raise HTTPException(status_code=403, detail="Only a super administrator can assign super_admin")
+    _guard_assigned_rank(user, role)
     existing = (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
     if existing is not None:
         raise HTTPException(status_code=409, detail="username already exists")
@@ -228,17 +258,19 @@ async def update_user(
     item = await session.get(User, user_uuid)
     if item is None:
         raise HTTPException(status_code=404, detail="User not found")
+    _guard_target_rank(user, item)
     role = body.get("role")
     status = body.get("status")
     password = body.get("password")
     if role is not None:
         role_value = str(role).strip().lower()
-        if role_value not in {"super_admin", "admin", "manager", "staff", "user"}:
+        if role_value not in ASSIGNABLE_ROLES:
             raise HTTPException(status_code=400, detail="Unknown role")
         if not await has_permission(session, user, "permission:assign"):
             raise HTTPException(status_code=403, detail="Missing permission: permission:assign")
         if role_value == "super_admin" and not await has_permission(session, user, "tenant:manage:any"):
             raise HTTPException(status_code=403, detail="Only a super administrator can assign super_admin")
+        _guard_assigned_rank(user, role_value)
         item.role = role_value
     if status is not None:
         status_value = str(status).strip().lower()
@@ -271,6 +303,7 @@ async def delete_user(
     item = await session.get(User, user_uuid)
     if item is None:
         raise HTTPException(status_code=404, detail="User not found")
+    _guard_target_rank(user, item)
     await session.delete(item)
     await session.commit()
     return {"deleted": True, "id": str(user_uuid)}

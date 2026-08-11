@@ -60,6 +60,23 @@ ROLE_DEFINITIONS: dict[str, dict[str, object]] = {
 }
 
 
+# How much authority a role carries over *other accounts*. Permissions answer
+# "may I edit users"; this answers "may I edit THIS user". Without it `user:update`
+# let an admin set the owner's password and log in as them.
+ROLE_RANK: dict[str, int] = {
+    "user": 0,
+    "staff": 1,
+    "manager": 2,
+    "admin": 3,
+    "super_admin": 4,
+}
+
+
+def role_rank(role: str | None) -> int:
+    """Unknown roles rank lowest — a typo must never grant authority."""
+    return ROLE_RANK.get((role or "").strip().lower(), 0)
+
+
 def split_permission(code: str) -> tuple[str, str]:
     resource, action = code.split(":", 1)
     return resource, action
