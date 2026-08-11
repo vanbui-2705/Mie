@@ -21,6 +21,13 @@ function isTab(value: string | null): value is FlowTab {
   return FLOW_TABS.some((tab) => tab.id === value);
 }
 
+// Which job this tab is watching. Kept in sessionStorage, not in React state
+// alone: a refresh in the middle of a ten-minute job used to orphan it — the
+// progress card disappeared and the heartbeat that keeps its files alive
+// stopped with it. sessionStorage is per tab, which is exactly what the
+// heartbeat already means by "session".
+const ACTIVE_JOB_KEY = "flowmeta_flow_active_job";
+
 function FlowStudio() {
   const params = useSearchParams();
   const raw = params.get("tab");
@@ -44,16 +51,28 @@ function FlowStudio() {
     window.history.replaceState(null, "", next === "reup" ? "/flow-studio" : `/flow-studio?tab=${next}`);
   }, []);
 
-  const startJob = useCallback((jobId: string) => {
+  const selectJob = useCallback((jobId: string) => {
+    window.sessionStorage.setItem(ACTIVE_JOB_KEY, jobId);
     setActiveJobId(jobId);
     setJob(null);
     setJobError(null);
   }, []);
 
-  const openJob = useCallback((jobId: string) => {
-    setActiveJobId(jobId);
-    setJob(null);
-    setJobError(null);
+  // Reattach to the job this tab was watching before the refresh. The id is
+  // checked first so a purged or foreign job clears itself instead of pinning
+  // an error banner on every load.
+  useEffect(() => {
+    const stored = window.sessionStorage.getItem(ACTIVE_JOB_KEY);
+    if (!stored) return;
+    let cancelled = false;
+    getClipJob(stored)
+      .then(() => {
+        if (!cancelled) setActiveJobId(stored);
+      })
+      .catch(() => window.sessionStorage.removeItem(ACTIVE_JOB_KEY));
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // A job opened from the history list is usually already finished, so there is
@@ -133,9 +152,9 @@ function FlowStudio() {
               history nothing visible happened when you pressed "Mở". */}
           {tab === "history" && result}
 
-          {tab === "reup" && <ReupPanel onJobStarted={startJob} onGoTo={selectTab} />}
-          {tab === "gen" && <GenPanel onJobStarted={startJob} />}
-          {tab === "history" && <HistoryPanel onOpenJob={openJob} />}
+          {tab === "reup" && <ReupPanel onJobStarted={selectJob} onGoTo={selectTab} />}
+          {tab === "gen" && <GenPanel onJobStarted={selectJob} />}
+          {tab === "history" && <HistoryPanel onOpenJob={selectJob} />}
           {tab === "settings" && <SettingsPanel />}
 
           {tab !== "history" && result}
