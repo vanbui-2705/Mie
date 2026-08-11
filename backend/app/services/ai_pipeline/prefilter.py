@@ -74,21 +74,18 @@ def detect_silences(
     db = frame_db(track.samples, track.sample_rate, frame_sec=frame_sec)
     quiet = db < threshold_db
 
-    spans: list[tuple[float, float]] = []
-    run_start: int | None = None
-    for i, is_quiet in enumerate(quiet):
-        if is_quiet and run_start is None:
-            run_start = i
-        elif not is_quiet and run_start is not None:
-            spans.append((run_start, i))
-            run_start = None
-    if run_start is not None:
-        spans.append((run_start, len(quiet)))
+    # A two-hour source at frame_sec=0.1 is 72 000 frames; a Python loop over
+    # that is the slowest part of an otherwise numpy-only module. `np.diff` on
+    # the padded boolean finds every run boundary in one pass.
+    padded = np.concatenate(([False], quiet, [False]))
+    edges = np.diff(padded.astype(np.int8))
+    starts = np.flatnonzero(edges == 1)
+    ends = np.flatnonzero(edges == -1)
 
     out: list[tuple[float, float]] = []
-    for start_idx, end_idx in spans:
-        start = start_idx * frame_sec
-        end = end_idx * frame_sec
+    for start_idx, end_idx in zip(starts, ends):
+        start = float(start_idx) * frame_sec
+        end = float(end_idx) * frame_sec
         if end - start >= min_silence_sec:
             out.append((round(start, 3), round(end, 3)))
     return out

@@ -118,3 +118,45 @@ def test_detect_hot_regions_on_silent_audio_returns_empty(tmp_path: Path):
     _write_wav(path, [(20.0, 0.0)])
     assert detect_hot_regions(load_track(str(path)), min_region_sec=5.0, max_region_sec=30.0, max_regions=5) == []
 
+def test_detect_silences_matches_a_reference_scan(tmp_path: Path):
+    """The vectorised run finder must agree with a plain scan, span for span."""
+    path = tmp_path / "alternating.wav"
+    segments: list[tuple[float, float]] = []
+    for _ in range(5):
+        segments.append((0.8, 0.9))
+        segments.append((0.6, 0.001))
+    _write_wav(path, segments)
+    track = load_track(str(path))
+
+    got = detect_silences(track, threshold_db=-35.0, min_silence_sec=0.3, frame_sec=0.1)
+
+    # Reference: the straightforward scan the vectorised version replaces.
+    db = frame_db(track.samples, track.sample_rate, frame_sec=0.1)
+    quiet = db < -35.0
+    expected: list[tuple[float, float]] = []
+    run_start = None
+    for i, is_quiet in enumerate(quiet):
+        if is_quiet and run_start is None:
+            run_start = i
+        elif not is_quiet and run_start is not None:
+            if (i - run_start) * 0.1 >= 0.3:
+                expected.append((round(run_start * 0.1, 3), round(i * 0.1, 3)))
+            run_start = None
+    if run_start is not None and (len(quiet) - run_start) * 0.1 >= 0.3:
+        expected.append((round(run_start * 0.1, 3), round(len(quiet) * 0.1, 3)))
+
+    assert got == expected
+
+
+def test_detect_silences_on_fully_quiet_audio_is_one_span(tmp_path: Path):
+    path = tmp_path / "quiet.wav"
+    _write_wav(path, [(3.0, 0.0)])
+    spans = detect_silences(load_track(str(path)), min_silence_sec=0.3, frame_sec=0.1)
+    assert len(spans) == 1
+    assert spans[0][0] == 0.0
+
+
+def test_detect_silences_on_fully_loud_audio_is_empty(tmp_path: Path):
+    path = tmp_path / "loud.wav"
+    _write_wav(path, [(3.0, 0.9)])
+    assert detect_silences(load_track(str(path)), min_silence_sec=0.3, frame_sec=0.1) == []
