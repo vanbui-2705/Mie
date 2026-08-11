@@ -51,3 +51,6 @@ backend/test_video.mp4
 backend/test_speech.mp4
 backend/test_audio.wav
 backend/scripts/test_video.mp4
+
+# Baseline media for the latency eval harness. Large, machine-local.
+backend/samples/
