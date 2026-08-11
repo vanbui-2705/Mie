@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("flowmeta.ai_pipeline.asr")
 
 _MODEL = None
+_BATCHED = None
 
 
 def _get_model():
@@ -47,10 +48,21 @@ def _get_model():
     return _MODEL
 
 
+def _get_batched_pipeline():
+    global _BATCHED
+    if _BATCHED is None:
+        from faster_whisper import BatchedInferencePipeline
+
+        logger.info("loading batched whisper pipeline (batch_size=%d)", settings.ASR_BATCH_SIZE)
+        _BATCHED = BatchedInferencePipeline(model=_get_model())
+    return _BATCHED
+
+
 def reset_model_cache() -> None:
     """Drop the cached model (used by tests and by long-lived worker restarts)."""
-    global _MODEL
+    global _MODEL, _BATCHED
     _MODEL = None
+    _BATCHED = None
 
 
 def slice_samples(samples: np.ndarray, sample_rate: int, region: HotRegion) -> np.ndarray:
@@ -60,14 +72,19 @@ def slice_samples(samples: np.ndarray, sample_rate: int, region: HotRegion) -> n
 
 
 def _transcribe_slice(audio: np.ndarray, language: str | None) -> tuple[str, list[Word], str]:
-    model = _get_model()
-    segments, info = model.transcribe(
-        audio,
+    batch_size = int(settings.ASR_BATCH_SIZE)
+    kwargs = dict(
         beam_size=settings.ASR_BEAM_SIZE,
         vad_filter=True,
         word_timestamps=True,
         language=language,
     )
+    if batch_size > 0:
+        engine = _get_batched_pipeline()
+        kwargs["batch_size"] = batch_size
+    else:
+        engine = _get_model()
+    segments, info = engine.transcribe(audio, **kwargs)
     words: list[Word] = []
     texts: list[str] = []
     for segment in segments:

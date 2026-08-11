@@ -78,6 +78,7 @@ def test_slice_samples_extracts_the_region(wav_path: str):
 async def test_transcribe_regions_offsets_word_timestamps(monkeypatch, wav_path: str):
     model = FakeModel()
     monkeypatch.setattr(asr_engine, "_get_model", lambda: model)
+    monkeypatch.setattr(asr_engine.settings, "ASR_BATCH_SIZE", 0)  # sequential engine
 
     regions = [
         HotRegion(index=0, start_sec=0.0, end_sec=5.0, energy=-10.0),
@@ -97,6 +98,7 @@ async def test_transcribe_regions_offsets_word_timestamps(monkeypatch, wav_path:
 async def test_transcribe_regions_skips_a_failing_region(monkeypatch, wav_path: str):
     model = ExplodingModel()
     monkeypatch.setattr(asr_engine, "_get_model", lambda: model)
+    monkeypatch.setattr(asr_engine.settings, "ASR_BATCH_SIZE", 0)  # sequential engine
 
     regions = [
         HotRegion(index=0, start_sec=0.0, end_sec=5.0, energy=-10.0),
@@ -111,6 +113,7 @@ async def test_transcribe_regions_skips_a_failing_region(monkeypatch, wav_path: 
 async def test_transcribe_regions_with_no_regions_uses_whole_file(monkeypatch, wav_path: str):
     model = FakeModel()
     monkeypatch.setattr(asr_engine, "_get_model", lambda: model)
+    monkeypatch.setattr(asr_engine.settings, "ASR_BATCH_SIZE", 0)  # sequential engine
 
     transcript = await asr_engine.transcribe_regions(load_track(wav_path), [])
 
@@ -118,3 +121,68 @@ async def test_transcribe_regions_with_no_regions_uses_whole_file(monkeypatch, w
     assert len(transcript.regions) == 1
     assert transcript.regions[0].region.start_sec == 0.0
     assert transcript.regions[0].region.end_sec == pytest.approx(60.0, abs=0.1)
+
+
+class FakeBatchedPipeline:
+    """Stands in for faster_whisper.BatchedInferencePipeline."""
+
+    def __init__(self, model):
+        self.model = model
+        self.calls = 0
+        self.batch_sizes: list[int] = []
+
+    def transcribe(self, audio, **kwargs):
+        self.calls += 1
+        self.batch_sizes.append(kwargs.get("batch_size"))
+        assert kwargs.get("word_timestamps") is True
+        segments = [
+            FakeSegment(" hello world", [FakeWord(0.0, 0.4, " hello"), FakeWord(0.5, 1.0, " world")])
+        ]
+        return iter(segments), FakeInfo()
+
+
+async def test_batched_path_still_offsets_word_timestamps(monkeypatch, wav_path: str):
+    pipeline = FakeBatchedPipeline(FakeModel())
+    monkeypatch.setattr(asr_engine, "_get_batched_pipeline", lambda: pipeline)
+    monkeypatch.setattr(asr_engine.settings, "ASR_BATCH_SIZE", 4)
+
+    regions = [
+        HotRegion(index=0, start_sec=0.0, end_sec=5.0, energy=-10.0),
+        HotRegion(index=1, start_sec=30.0, end_sec=35.0, energy=-11.0),
+    ]
+    transcript = await asr_engine.transcribe_regions(load_track(wav_path), regions)
+
+    assert pipeline.batch_sizes == [4, 4]
+    assert transcript.regions[1].words[0].start == pytest.approx(30.0)
+
+
+async def test_batch_size_zero_uses_the_sequential_model(monkeypatch, wav_path: str):
+    model = FakeModel()
+    monkeypatch.setattr(asr_engine, "_get_model", lambda: model)
+    monkeypatch.setattr(asr_engine.settings, "ASR_BATCH_SIZE", 0)
+
+    regions = [HotRegion(index=0, start_sec=0.0, end_sec=5.0, energy=-10.0)]
+    await asr_engine.transcribe_regions(load_track(wav_path), regions)
+
+    assert model.calls == 1
+
+
+async def test_a_failing_region_is_still_skipped_in_batched_mode(monkeypatch, wav_path: str):
+    class ExplodingPipeline(FakeBatchedPipeline):
+        def transcribe(self, audio, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("ctranslate2 blew up")
+            return super().transcribe(audio, **kwargs)
+
+    pipeline = ExplodingPipeline(FakeModel())
+    monkeypatch.setattr(asr_engine, "_get_batched_pipeline", lambda: pipeline)
+    monkeypatch.setattr(asr_engine.settings, "ASR_BATCH_SIZE", 4)
+
+    regions = [
+        HotRegion(index=0, start_sec=0.0, end_sec=5.0, energy=-10.0),
+        HotRegion(index=1, start_sec=10.0, end_sec=15.0, energy=-11.0),
+    ]
+    transcript = await asr_engine.transcribe_regions(load_track(wav_path), regions)
+    assert len(transcript.regions) == 1
+    assert transcript.regions[0].region.index == 1

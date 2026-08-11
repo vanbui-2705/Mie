@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     ASR_COMPUTE_TYPE: str = "int8"
     ASR_CPU_THREADS: int = 8
     ASR_BEAM_SIZE: int = 1
+    # 0 disables batching and restores the one-region-at-a-time path. Batched
+    # decoding can shift word timestamps slightly, so it must be switchable
+    # off without a code change.
+    ASR_BATCH_SIZE: int = 8
     SCORING_BACKEND: str = "gemini"     # gemini | ollama | claude | heuristic
     CLIP_PREFILTER_MAX_REGIONS: int = 30
     CLIP_PREFILTER_MIN_REGION_SEC: float = 20.0
