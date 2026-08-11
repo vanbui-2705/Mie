@@ -81,6 +81,11 @@ function errorDetail(body: unknown): string | null {
 
 function normalizeError(status: number, body: unknown, path: string): string {
   const detail = errorDetail(body);
+  // The throttle on the token-less endpoints answers 429; without this the
+  // sign-in form would show the raw "Yêu cầu thất bại (429)".
+  if (status === 429) {
+    return detail || "Bạn đã thử quá nhiều lần. Vui lòng đợi vài phút rồi thử lại.";
+  }
   if (status === 401 && path === "/api/auth/login") {
     return detail === "Invalid username or password"
       ? "Sai tài khoản hoặc mật khẩu."
