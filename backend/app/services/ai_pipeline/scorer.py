@@ -29,7 +29,9 @@ Rubric (0-100, weighted):
 - Quotability / shareability (10)
 
 Rules:
-- Pick at most {top_n} segments, each from a DIFFERENT region when possible.
+- Return exactly {top_n} segments, each from a DIFFERENT region when possible.
+  Fewer is allowed ONLY if the transcript genuinely has fewer usable segments;
+  rank the weaker ones lower instead of leaving them out.
 - Each segment must last between {min_sec} and {max_sec} seconds.
 - Every transcript line is prefixed with its real timestamp as [start-end].
 - start_sec and end_sec are ABSOLUTE seconds: COPY start_sec from the marker of the
