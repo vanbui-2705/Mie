@@ -62,6 +62,21 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
   const [readyCount, setReadyCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const finishedRef = useRef(false);
+  // The stream and the poll both set the phase, and they disagree for a moment:
+  // the poll reads a status the worker has not written yet. Keeping the current
+  // phase in a ref lets both writers see it without re-running effects.
+  const phaseRef = useRef("queued");
+
+  // Only a forward move, or a terminal one, is a real phase change. Without
+  // this the bar walked backwards every 15s — the poll answered QUEUED while
+  // the stream had already reported analyzing.
+  const enterPhase = useCallback((next: string, force = false) => {
+    if (next === phaseRef.current) return false;
+    if (!force && (PERCENT[next] ?? 0) < (PERCENT[phaseRef.current] ?? 0)) return false;
+    phaseRef.current = next;
+    setPhase(next);
+    return true;
+  }, []);
 
   // The latch closes only after the job actually came back. Closing it first
   // meant one failed fetch (API restarting, network blip) left the card stuck
@@ -80,14 +95,22 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
 
   const { connected } = useFlowJobStream(jobId, (event) => {
     if (event.type === "phase") {
-      setPhase(event.phase);
-      setProgress(typeof event.progress === "number" ? event.progress : 0);
+      const moved = enterPhase(event.phase);
+      // A tick from a phase this card already left is not this phase's fraction.
+      // The video keeps downloading in the background and keeps reporting
+      // "queued" all through ASR; its 0..1 used to be painted onto the analyzing
+      // bar, which is what made the bar climb to 60% and snap back to 31%.
+      if (event.phase !== phaseRef.current) return;
+      // A transition carries no fraction and starts its phase at the floor; a
+      // tick carries one and must not be thrown away by the next poll.
+      if (typeof event.progress === "number") setProgress(event.progress);
+      else if (moved) setProgress(0);
     } else if (event.type === "clip_ready") setReadyCount((n) => n + 1);
     else if (event.type === "done") {
-      setPhase("done");
+      enterPhase("done", true);
       void finish();
     } else {
-      setPhase("error");
+      enterPhase("error", true);
       setError(describeFlowError(event.error));
       void finish();
     }
@@ -104,10 +127,11 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
       try {
         const job = await getClipJob(jobId);
         if (cancelled) return;
-        setPhase(phaseFromStatus(job.status));
-        // The poll knows the phase, never the fraction inside it.
-        setProgress(0);
-        if (TERMINAL.includes(job.status)) {
+        const terminal = TERMINAL.includes(job.status);
+        // The poll knows the phase, never the fraction inside it — so it only
+        // clears the fraction when it actually moved the job to a new phase.
+        if (enterPhase(phaseFromStatus(job.status), terminal)) setProgress(0);
+        if (terminal) {
           if (job.error) setError(describeFlowError(job.error));
           if (!finishedRef.current) {
             finishedRef.current = true;
@@ -126,7 +150,7 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
       cancelled = true;
       clearInterval(timer);
     };
-  }, [jobId, onFinished]);
+  }, [jobId, onFinished, enterPhase]);
 
   const floor = PERCENT[phase] ?? 5;
   const ceiling = PHASE_END[phase] ?? floor;

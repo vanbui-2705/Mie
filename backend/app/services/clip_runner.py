@@ -84,6 +84,7 @@ class ClipRunner:
         self._session_factory = session_factory
         self._publish = publish
         self._cancelled = False
+        self._phase = "queued"
         self._timer = StageTimer()
 
     # ------------------------------------------------------------------ DB
@@ -113,6 +114,7 @@ class ClipRunner:
             job = (await session.execute(select(ClipJob).where(ClipJob.id == ctx.job_uuid))).scalar_one()
             job.status = status
             await session.commit()
+        self._phase = phase
         await self._publish(
             "clip", "phase", {"user_id": ctx.user_id, "job_id": ctx.job_id, "phase": phase}
         )
@@ -218,6 +220,7 @@ class ClipRunner:
 
     async def _process(self, job_id: str) -> None:
         ctx = await self._load_context(job_id)
+        self._phase = "queued"
         work_dir = Path(settings.CLIP_UPLOAD_DIR) / ctx.user_id
         work_dir.mkdir(parents=True, exist_ok=True)
         audio_path = str(work_dir / f"{ctx.job_id}.wav")
@@ -227,6 +230,12 @@ class ClipRunner:
 
         try:
             async def tick_download(fraction: float) -> None:
+                # The video keeps downloading in the background long after the
+                # analysis started on the audio. Reporting its percentage then
+                # says nothing about the phase the job is actually in, so the
+                # ticks stop at the phase boundary.
+                if self._phase != "queued":
+                    return
                 await self._publish_progress(ctx, "queued", fraction)
 
             with self._timer.stage("resolve_source"):

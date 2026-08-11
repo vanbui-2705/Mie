@@ -441,6 +441,55 @@ async def test_phase_events_carry_progress(session, session_factory, user_id, fa
             assert 0.0 <= body["progress"] <= 1.0
 
 
+async def test_the_background_download_stops_ticking_once_analysis_starts(
+    session, session_factory, user_id, fake_pipeline, monkeypatch, tmp_path
+):
+    """A download tick belongs to the phase that was waiting for the download.
+
+    With audio-first the video keeps downloading all through ASR, and its
+    percentage kept arriving as a "queued" fraction. The UI paints the newest
+    fraction on the bar it is showing, so the analyzing bar walked 30% to 60%
+    with the download and snapped back to 31% when the second one started.
+    """
+    published = []
+    held: dict[str, object] = {}
+
+    async def publish(channel, event_type, data):
+        published.append((channel, event_type, data))
+
+    async def resolve_and_hold(source_type, source_ref, work_dir, job_id, on_progress=None):
+        path = tmp_path / "source.mp4"
+        path.write_bytes(b"video-bytes")
+        held["tick"] = on_progress
+        await on_progress(0.4)  # still queued: this one is real progress
+        return runner_mod.ResolvedSource(
+            analysis_media=str(path), analysis_is_temp=False,
+            video_path=str(path), video_task=None, video_is_temp=False,
+        )
+
+    async def asr_while_downloading(track, regions, **kwargs):
+        # The background download reports on its own schedule, mid-analysis.
+        await held["tick"](0.9)
+        region = regions[0]
+        words = tuple(Word(i * 1.0, i * 1.0 + 0.5, f"w{i}") for i in range(10))
+        return Transcript(
+            language="en",
+            regions=(RegionTranscript(region=region, text="hello world", words=words),),
+        )
+
+    monkeypatch.setattr(runner_mod, "resolve_source_audio_first", resolve_and_hold)
+    monkeypatch.setattr(runner_mod, "transcribe_regions", asr_while_downloading)
+
+    job = await _make_job(session, user_id)
+    await runner_mod.ClipRunner(session_factory=session_factory, publish=publish).run(str(job.id))
+
+    queued_ticks = [
+        d["progress"] for _c, kind, d in published
+        if kind == "phase" and d["phase"] == "queued" and "progress" in d
+    ]
+    assert queued_ticks == [0.4]
+
+
 async def test_a_cancelled_render_does_not_block_the_next_job(
     session, session_factory, user_id, fake_pipeline, monkeypatch
 ):
