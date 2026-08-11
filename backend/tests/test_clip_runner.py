@@ -55,14 +55,17 @@ def fake_pipeline(monkeypatch, tmp_path: Path):
         Path(audio_path).write_bytes(b"wav")
         return True
 
-    def fake_detect_hot_regions(wav_path, **kwargs):
+    def fake_load_track(wav_path):
+        return object()  # the fakes below never look inside it
+
+    def fake_detect_hot_regions(track, **kwargs):
         state["prefilter_max_regions"].append(kwargs["max_regions"])
         return [HotRegion(index=0, start_sec=0.0, end_sec=120.0, energy=-12.0)]
 
-    def fake_detect_silences(wav_path, **kwargs):
+    def fake_detect_silences(track, **kwargs):
         return [(39.0, 40.5)]
 
-    async def fake_transcribe_regions(audio_path, regions, **kwargs):
+    async def fake_transcribe_regions(track, regions, **kwargs):
         region = regions[0]
         words = tuple(Word(i * 1.0, i * 1.0 + 0.5, f"w{i}") for i in range(10))
         return Transcript(
@@ -102,6 +105,7 @@ def fake_pipeline(monkeypatch, tmp_path: Path):
 
     monkeypatch.setattr(runner_mod, "resolve_source_audio_first", fake_resolve)
     monkeypatch.setattr(runner_mod, "extract_audio", fake_extract_audio)
+    monkeypatch.setattr(runner_mod, "load_track", fake_load_track)
     monkeypatch.setattr(runner_mod, "detect_hot_regions", fake_detect_hot_regions)
     monkeypatch.setattr(runner_mod, "detect_silences", fake_detect_silences)
     monkeypatch.setattr(runner_mod, "transcribe_regions", fake_transcribe_regions)

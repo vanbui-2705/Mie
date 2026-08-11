@@ -10,12 +10,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from app.config import settings
-from app.services.ai_pipeline.prefilter import read_pcm16_mono
 from app.services.ai_pipeline.types import HotRegion, RegionTranscript, Transcript, Word
+
+if TYPE_CHECKING:
+    from app.services.ai_pipeline.audio import AudioTrack
 
 logger = logging.getLogger("flowmeta.ai_pipeline.asr")
 
@@ -78,20 +81,20 @@ def _transcribe_slice(audio: np.ndarray, language: str | None) -> tuple[str, lis
 
 
 async def transcribe_regions(
-    audio_path: str,
+    track: "AudioTrack",
     regions: Sequence[HotRegion],
     *,
     language: str | None = None,
 ) -> Transcript:
-    """Transcribe each hot region. When `regions` is empty the whole file is
+    """Transcribe each hot region. When `regions` is empty the whole track is
     treated as a single region (prefilter found nothing — better slow than empty)."""
     loop = asyncio.get_running_loop()
-    samples, sample_rate = await loop.run_in_executor(None, read_pcm16_mono, audio_path)
-    total_sec = len(samples) / float(sample_rate)
+    samples, sample_rate = track.samples, track.sample_rate
+    total_sec = track.duration_sec
 
     targets = list(regions)
     if not targets:
-        logger.warning("no hot regions for %s; transcribing full %.1fs", audio_path, total_sec)
+        logger.warning("no hot regions; transcribing full %.1fs", total_sec)
         targets = [HotRegion(index=0, start_sec=0.0, end_sec=total_sec, energy=0.0)]
 
     detected_language = language or "unknown"

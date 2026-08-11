@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from app.services.ai_pipeline.audio import load_track
 from app.services.ai_pipeline.prefilter import (
     detect_hot_regions,
     detect_silences,
@@ -57,7 +58,7 @@ def test_frame_db_is_louder_in_the_middle(loud_middle_wav: str):
 
 
 def test_detect_silences_finds_head_and_tail(loud_middle_wav: str):
-    silences = detect_silences(loud_middle_wav, threshold_db=-35.0, min_silence_sec=1.0)
+    silences = detect_silences(load_track(loud_middle_wav), threshold_db=-35.0, min_silence_sec=1.0)
     assert len(silences) == 2
     head, tail = silences
     assert head[0] == pytest.approx(0.0, abs=0.6)
@@ -67,7 +68,7 @@ def test_detect_silences_finds_head_and_tail(loud_middle_wav: str):
 
 def test_detect_hot_regions_covers_the_loud_span(loud_middle_wav: str):
     regions = detect_hot_regions(
-        loud_middle_wav, min_region_sec=5.0, max_region_sec=30.0, max_regions=5
+        load_track(loud_middle_wav), min_region_sec=5.0, max_region_sec=30.0, max_regions=5
     )
     assert len(regions) == 1
     region = regions[0]
@@ -85,7 +86,7 @@ def test_detect_hot_regions_respects_max_regions(tmp_path: Path):
         segments.append((4.0, 0.002))
     _write_wav(path, segments)
     regions = detect_hot_regions(
-        str(path), min_region_sec=3.0, max_region_sec=10.0, max_regions=2
+        load_track(str(path)), min_region_sec=3.0, max_region_sec=10.0, max_regions=2
     )
     assert len(regions) == 2
     assert [r.index for r in regions] == [0, 1]
@@ -101,7 +102,7 @@ def test_detect_hot_regions_never_remerges_padded_windows_past_the_cap(tmp_path:
     _write_wav(path, segments)
 
     regions = detect_hot_regions(
-        str(path),
+        load_track(str(path)),
         min_region_sec=5.0,
         max_region_sec=5.0,
         max_regions=8,
@@ -115,4 +116,5 @@ def test_detect_hot_regions_never_remerges_padded_windows_past_the_cap(tmp_path:
 def test_detect_hot_regions_on_silent_audio_returns_empty(tmp_path: Path):
     path = tmp_path / "silent.wav"
     _write_wav(path, [(20.0, 0.0)])
-    assert detect_hot_regions(str(path), min_region_sec=5.0, max_region_sec=30.0, max_regions=5) == []
+    assert detect_hot_regions(load_track(str(path)), min_region_sec=5.0, max_region_sec=30.0, max_regions=5) == []
+

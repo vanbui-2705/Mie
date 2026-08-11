@@ -12,10 +12,14 @@ from __future__ import annotations
 
 import logging
 import wave
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from app.services.ai_pipeline.types import HotRegion
+
+if TYPE_CHECKING:  # audio.py imports this module — keep the edge one-way.
+    from app.services.ai_pipeline.audio import AudioTrack
 
 logger = logging.getLogger("flowmeta.ai_pipeline.prefilter")
 
@@ -60,15 +64,14 @@ def frame_db(
 
 
 def detect_silences(
-    wav_path: str,
+    track: "AudioTrack",
     *,
     threshold_db: float = -35.0,
     min_silence_sec: float = 0.3,
     frame_sec: float = 0.1,
 ) -> list[tuple[float, float]]:
     """Return [(start_sec, end_sec)] spans quieter than `threshold_db`."""
-    samples, sample_rate = read_pcm16_mono(wav_path)
-    db = frame_db(samples, sample_rate, frame_sec=frame_sec)
+    db = frame_db(track.samples, track.sample_rate, frame_sec=frame_sec)
     quiet = db < threshold_db
 
     spans: list[tuple[float, float]] = []
@@ -102,7 +105,7 @@ def _merge(spans: list[list[float]], gap_sec: float) -> list[list[float]]:
 
 
 def detect_hot_regions(
-    wav_path: str,
+    track: "AudioTrack",
     *,
     min_region_sec: float,
     max_region_sec: float,
@@ -117,8 +120,7 @@ def detect_hot_regions(
     loudest frame, and the top `max_regions` by mean energy are returned in
     chronological order with fresh indices.
     """
-    samples, sample_rate = read_pcm16_mono(wav_path)
-    db = frame_db(samples, sample_rate, frame_sec=frame_sec)
+    db = frame_db(track.samples, track.sample_rate, frame_sec=frame_sec)
     if len(db) == 0:
         return []
 
@@ -126,7 +128,7 @@ def detect_hot_regions(
     floor_db = -55.0
     speech = db[db > floor_db]
     if speech.size == 0:
-        logger.info("prefilter: no frame above %.0f dBFS in %s", floor_db, wav_path)
+        logger.info("prefilter: no frame above %.0f dBFS in %s", floor_db, "track")
         return []
 
     threshold = float(np.percentile(speech, 70.0))
@@ -194,7 +196,7 @@ def detect_hot_regions(
     ]
     logger.info(
         "prefilter: %s -> %d region(s), %.1fs of %.1fs (%.0f%%)",
-        wav_path,
+        "track",
         len(regions),
         sum(r.duration for r in regions),
         total_sec,

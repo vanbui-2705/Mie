@@ -24,6 +24,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType, ClipStatus
 from app.services.ai_pipeline.asr_engine import transcribe_regions
+from app.services.ai_pipeline.audio import load_track
 from app.services.ai_pipeline.crop import compute_crop_path
 from app.services.ai_pipeline.cutter import (
     cut_video_stream,
@@ -221,9 +222,12 @@ class ClipRunner:
                 if not await extract_audio(resolved.analysis_media, audio_path):
                     raise RuntimeError("failed to extract audio from the source video")
 
+            with self._timer.stage("decode_audio"):
+                track = load_track(audio_path)
+
             with self._timer.stage("prefilter"):
                 regions = detect_hot_regions(
-                    audio_path,
+                    track,
                     min_region_sec=settings.CLIP_PREFILTER_MIN_REGION_SEC,
                     max_region_sec=settings.CLIP_PREFILTER_MAX_REGION_SEC,
                     max_regions=min(
@@ -232,10 +236,10 @@ class ClipRunner:
                     ),
                 )
             with self._timer.stage("silences"):
-                silences = detect_silences(audio_path)
+                silences = detect_silences(track)
             self._abort_point(ctx)
             with self._timer.stage("asr"):
-                transcript = await transcribe_regions(audio_path, regions)
+                transcript = await transcribe_regions(track, regions)
             if not transcript.regions:
                 raise RuntimeError("ASR produced no usable speech regions")
 

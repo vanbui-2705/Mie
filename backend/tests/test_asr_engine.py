@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from app.services.ai_pipeline import asr_engine
+from app.services.ai_pipeline.audio import load_track
 from app.services.ai_pipeline.types import HotRegion
 
 SAMPLE_RATE = 16000
@@ -68,11 +69,9 @@ class ExplodingModel(FakeModel):
 
 
 def test_slice_samples_extracts_the_region(wav_path: str):
-    from app.services.ai_pipeline.prefilter import read_pcm16_mono
-
-    samples, sr = read_pcm16_mono(wav_path)
+    track = load_track(wav_path)
     region = HotRegion(index=0, start_sec=10.0, end_sec=20.0, energy=-12.0)
-    sliced = asr_engine.slice_samples(samples, sr, region)
+    sliced = asr_engine.slice_samples(track.samples, track.sample_rate, region)
     assert len(sliced) == 10 * SAMPLE_RATE
 
 
@@ -84,7 +83,7 @@ async def test_transcribe_regions_offsets_word_timestamps(monkeypatch, wav_path:
         HotRegion(index=0, start_sec=0.0, end_sec=5.0, energy=-10.0),
         HotRegion(index=1, start_sec=30.0, end_sec=35.0, energy=-11.0),
     ]
-    transcript = await asr_engine.transcribe_regions(wav_path, regions)
+    transcript = await asr_engine.transcribe_regions(load_track(wav_path), regions)
 
     assert model.calls == 2
     assert transcript.language == "en"
@@ -103,7 +102,7 @@ async def test_transcribe_regions_skips_a_failing_region(monkeypatch, wav_path: 
         HotRegion(index=0, start_sec=0.0, end_sec=5.0, energy=-10.0),
         HotRegion(index=1, start_sec=10.0, end_sec=15.0, energy=-11.0),
     ]
-    transcript = await asr_engine.transcribe_regions(wav_path, regions)
+    transcript = await asr_engine.transcribe_regions(load_track(wav_path), regions)
 
     assert len(transcript.regions) == 1
     assert transcript.regions[0].region.index == 1
@@ -113,7 +112,7 @@ async def test_transcribe_regions_with_no_regions_uses_whole_file(monkeypatch, w
     model = FakeModel()
     monkeypatch.setattr(asr_engine, "_get_model", lambda: model)
 
-    transcript = await asr_engine.transcribe_regions(wav_path, [])
+    transcript = await asr_engine.transcribe_regions(load_track(wav_path), [])
 
     assert model.calls == 1
     assert len(transcript.regions) == 1

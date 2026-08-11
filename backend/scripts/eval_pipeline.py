@@ -30,6 +30,7 @@ load_dotenv()
 
 from app.config import settings  # noqa: E402
 from app.services.ai_pipeline.asr_engine import transcribe_regions  # noqa: E402
+from app.services.ai_pipeline.audio import load_track  # noqa: E402
 from app.services.ai_pipeline.crop import compute_crop_path  # noqa: E402
 from app.services.ai_pipeline.cutter import (  # noqa: E402
     cut_video_stream,
@@ -206,13 +207,17 @@ async def evaluate(
     timings["extract"] = time.time() - t0
 
     t0 = time.time()
+    track = load_track(audio_path)
+    timings["decode_audio"] = time.time() - t0
+
+    t0 = time.time()
     regions = detect_hot_regions(
-        audio_path,
+        track,
         min_region_sec=settings.CLIP_PREFILTER_MIN_REGION_SEC,
         max_region_sec=settings.CLIP_PREFILTER_MAX_REGION_SEC,
         max_regions=settings.CLIP_PREFILTER_MAX_REGIONS,
     )
-    silences = detect_silences(audio_path)
+    silences = detect_silences(track)
     timings["prefilter"] = time.time() - t0
     covered = sum(r.duration for r in regions)
 
@@ -222,7 +227,7 @@ async def evaluate(
         transcript = load_transcript(cache_path)
         logger.info("reusing cached transcript %s (ASR skipped)", cache_path)
     else:
-        transcript = await transcribe_regions(audio_path, regions)
+        transcript = await transcribe_regions(track, regions)
         dump_transcript(transcript, cache_path)
     timings["asr"] = time.time() - t0
 
