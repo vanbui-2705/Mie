@@ -57,3 +57,16 @@ backend/samples/
 
 # Scratch dir for eval logs and captured SSE traces. Holds session tokens.
 .codex-tmp/
+
+# Playwright MCP session dumps: page snapshots, console logs, screenshots.
+# Written on every browser run and capture whatever was on screen, tokens included.
+.playwright-mcp/
+
+# One-off debugging scripts kept on disk between sessions, not part of the app.
+backend/diagnose_share_dom.py
+backend/fix_fetch.py
+backend/patch_main.py
+*.bak
+
+# Its own git repository — the user guide site is versioned separately.
+guide-site/
