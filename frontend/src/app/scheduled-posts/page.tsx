@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { apiDelete, apiGet, apiPost } from "@/lib/api-client";
 
 type PostTarget = { id: string; type: "page" | "personal" | "group"; name: string; status: string; available: boolean; reason?: string; page_id?: string; group_id?: string; url?: string; uid?: string; };
-type ScheduledPost = { id: string; name: string; targets: string[]; target_count: number; message: string; link: string; media_count: number; post_count: number; next_item_index: number; post_items?: Array<{ message: string; link: string; media_count: number }>; max_threads: number; interval_seconds: number | null; next_fire_at: string | null; last_fired_at: string | null; stop_at: string | null; status: string; };
+type ScheduledPost = { id: string; name: string; targets: string[]; target_count: number; message: string; link: string; media_count: number; post_count: number; next_item_index: number; post_items?: Array<{ message: string; link: string; media_count: number }>; max_threads: number; interval_seconds: number | null; next_fire_at: string | null; last_fired_at: string | null; stop_at: string | null; status: string; last_error?: string; };
 type DraftPost = { id: string; message: string; link: string; files: File[]; };
 
 export default function ScheduledPostsPage() {
@@ -244,6 +244,9 @@ Bài tiếp theo #{((item.next_item_index || 0) % Math.max(item.post_count || 1,
 <div className="text-[8pt]" style={{ color: "var(--muted-foreground)" }}>
 Tiếp theo: {formatDate(item.next_fire_at)} · Lần cuối: {formatDate(item.last_fired_at)} · Lặp lại: {formatInterval(item.interval_seconds)}
 </div>
+{item.last_error ? (
+<div className="text-[8pt]" style={{ color: "var(--destructive)" }}>{item.last_error}</div>
+) : null}
 </div>
 <div className="flex flex-wrap items-center gap-2 md:justify-end">
 <Button variant="outline" className="h-8 gap-1.5 text-[8pt]" onClick={() => action(item.id, "fire-now")}><Zap className="h-3.5 w-3.5" /> Chạy ngay</Button>

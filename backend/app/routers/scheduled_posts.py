@@ -13,7 +13,11 @@ from app.auth import current_user
 from app.rbac import require_permission
 from app.db.postgres import session_context
 from app.models.sqlmodels import ScheduledPost, User
-from app.services.scheduled_post_service import ScheduledPostNotFound, ScheduledPostService
+from app.services.scheduled_post_service import (
+    ScheduledPostNotFound,
+    ScheduledPostService,
+    ScheduleTargetError,
+)
 
 router = APIRouter(tags=["scheduled-posts"])
 UPLOAD_DIR = Path(os.environ.get("FLOWMETA_UPLOAD_DIR", "/app/uploads"))
@@ -31,6 +35,7 @@ async def create_scheduled_post(request: Request, user: User = Depends(require_p
     body, uploads, uploads_by_item = await _read_schedule_request(request)
     _validate_schedule_body(body, has_uploads=bool(uploads or uploads_by_item))
     service = ScheduledPostService(get_session=session_context)
+    await _assert_targets_owned(service, user.id, body)
     initial_items = _body_post_items(body)
     first = initial_items[0] if initial_items else {"message": str(body.get("message") or ""), "link": str(body.get("link") or ""), "media_paths": []}
     item = await service.create(
@@ -65,6 +70,7 @@ async def update_scheduled_post(sp_id: str, request: Request, user: User = Depen
     body, uploads, uploads_by_item = await _read_schedule_request(request)
     _validate_schedule_body(body, has_uploads=bool(uploads or uploads_by_item))
     service = ScheduledPostService(get_session=session_context)
+    await _assert_targets_owned(service, user.id, body)
     try:
         post_items = _body_post_items(body)
         if uploads:
@@ -124,6 +130,20 @@ async def delete_scheduled_post(sp_id: str, user: User = Depends(require_permiss
     except ScheduledPostNotFound:
         raise HTTPException(status_code=404, detail="Scheduled post not found") from None
     return {"deleted": True}
+
+
+async def _assert_targets_owned(
+    service: ScheduledPostService, user_id: uuid.UUID, body: dict,
+) -> None:
+    """Refuse a schedule aimed at pages, groups or accounts someone else owns.
+
+    The publisher trusts the ids it is handed, so this is the boundary that
+    decides whether a schedule can post as another tenant.
+    """
+    try:
+        await service.assert_targets_owned(user_id, _as_str_list(body.get("targets")))
+    except ScheduleTargetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 async def _set_status(sp_id: str, user: User, value: str) -> dict:
@@ -224,6 +244,7 @@ def _scheduled_post_dict(item: ScheduledPost) -> dict:
         "last_fired_at": item.last_fired_at.isoformat() if item.last_fired_at else None,
         "stop_at": item.stop_at.isoformat() if item.stop_at else None,
         "status": item.status,
+        "last_error": item.last_error or "",
         "created_at": item.created_at.isoformat() if item.created_at else None,
         "updated_at": item.updated_at.isoformat() if item.updated_at else None,
     }

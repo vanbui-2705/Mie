@@ -11,49 +11,92 @@ from contextlib import asynccontextmanager
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.sqlmodels import ScheduledPost, TaskRun, TaskRunStatus
+from app.crypto import encrypt
+from app.models.sqlmodels import (
+    FacebookAccount,
+    FacebookGroup,
+    FacebookPage,
+    ScheduledPost,
+    TaskRun,
+    TaskRunStatus,
+)
 
 logger = logging.getLogger("flowmeta.scheduled_posts")
+
+# Strong references to the post coroutines we hand to the event loop. asyncio
+# only keeps a weak reference to a running task, so without this the garbage
+# collector is free to drop a scheduled post before it has posted anything.
+_running_posts: set = set()
 
 
 class ScheduledPostNotFound(Exception):
     pass
 
 
+class ScheduleTargetError(Exception):
+    """Raised when a schedule points at targets its owner does not hold."""
+
+
 SessionProvider = Callable[[], AsyncIterator[AsyncSession]]
+
+TARGET_MODELS = {
+    "page": FacebookPage,
+    "group": FacebookGroup,
+    "personal": FacebookAccount,
+}
+TARGET_KEYS = {
+    "page": "page_ids",
+    "group": "group_ids",
+    "personal": "personal_account_ids",
+}
+
+
+async def resolve_owned_targets(
+    session: AsyncSession, user_id: uuid.UUID, targets: list[str],
+) -> tuple[dict[str, list[str]], list[str]]:
+    """Split `type:uuid` targets into publisher lists, keeping only this user's.
+
+    The publisher loads each target by primary key and posts with the token
+    stored on it, so a target that belongs to someone else is not a broken
+    reference — it is a post made as them. Ownership has to be settled here,
+    before the ids leave this function.
+    """
+    lists: dict[str, list[str]] = {
+        "page_ids": [], "group_ids": [], "personal_account_ids": [],
+    }
+    rejected: list[str] = []
+    for raw in targets:
+        value = str(raw or "").strip()
+        try:
+            target_type, raw_id = value.split(":", 1)
+            target_id = uuid.UUID(raw_id)
+        except (ValueError, AttributeError):
+            rejected.append(value)
+            continue
+        model = TARGET_MODELS.get(target_type)
+        if model is None:
+            rejected.append(value)
+            continue
+        target = await session.get(model, target_id)
+        if target is None or target.user_id != user_id:
+            rejected.append(value)
+            continue
+        lists[TARGET_KEYS[target_type]].append(str(target_id))
+    return lists, rejected
 
 
 class ScheduledPostService:
     def __init__(self, get_session: SessionProvider) -> None:
         self._get_session = get_session
 
-    async def compute_next_fire(self, sp_id: uuid.UUID) -> ScheduledPost:
+    async def assert_targets_owned(self, user_id: uuid.UUID, targets: list[str]) -> None:
         async with self._get_session() as session:
-            sp = await session.get(ScheduledPost, sp_id)
-            if sp is None:
-                raise ScheduledPostNotFound(str(sp_id))
-
-            now = datetime.now(timezone.utc)
-            sp.last_fired_at = now
-
-            if sp.stop_at and now >= sp.stop_at:
-                sp.status = "completed"
-                sp.next_fire_at = None
-            elif sp.interval_seconds is None:
-                sp.status = "completed"
-                sp.next_fire_at = None
-            else:
-                proposed = (sp.next_fire_at or now) + timedelta(seconds=sp.interval_seconds)
-                if sp.stop_at and proposed > sp.stop_at:
-                    sp.status = "completed"
-                    sp.next_fire_at = None
-                else:
-                    sp.next_fire_at = proposed
-
-            session.add(sp)
-            await session.commit()
-            await session.refresh(sp)
-            return sp
+            _, rejected = await resolve_owned_targets(session, user_id, targets)
+        if rejected:
+            raise ScheduleTargetError(
+                "Không thể lên lịch cho mục tiêu không thuộc tài khoản này: "
+                + ", ".join(rejected)
+            )
 
     async def get_for_user(self, sp_id: uuid.UUID, user_id: uuid.UUID) -> ScheduledPost:
         async with self._get_session() as session:
@@ -245,15 +288,40 @@ async def enqueue_due_posts(
     task_creator = create_background_task or asyncio.create_task
 
     async with session_provider() as session:
+        # skip_locked, so a fire-now request and the scheduler tick cannot both
+        # claim the same row and post it twice. Whichever gets the lock first
+        # advances next_fire_at; the other simply does not see the row.
         due = (await session.execute(
-            select(ScheduledPost).where(
+            select(ScheduledPost)
+            .where(
                 ScheduledPost.status == "scheduled",
                 ScheduledPost.next_fire_at.is_not(None),
                 ScheduledPost.next_fire_at <= now,
             )
+            .with_for_update(skip_locked=True)
         )).scalars().all()
 
         for sp in due:
+            targets = json.loads(sp.targets_json or "[]")
+            lists, rejected = await resolve_owned_targets(session, sp.user_id, targets)
+            if rejected:
+                logger.warning(
+                    "scheduled post %s lists targets user %s does not own: %s",
+                    sp.id, sp.user_id, ", ".join(rejected),
+                )
+            if not any(lists.values()):
+                # Nothing left to post to. Retrying every minute would only
+                # repeat the same refusal, so stop and record why.
+                sp.status = "error"
+                sp.next_fire_at = None
+                sp.last_error = (
+                    "Không còn mục tiêu hợp lệ thuộc tài khoản này: "
+                    + (", ".join(rejected) or "targets trống")
+                )
+                session.add(sp)
+                await session.commit()
+                continue
+
             logger.info("enqueueing scheduled post %s for user %s", sp.id, sp.user_id)
             item_index, post_item, post_count = _select_post_item(sp)
             post_message = str(post_item.get("message") or "")
@@ -264,7 +332,9 @@ async def enqueue_due_posts(
                 status=TaskRunStatus.RUNNING,
                 action=sp.action,
                 max_threads=sp.max_threads,
-                text_input_enc=post_message,
+                # Encrypted like every other writer of this column. It used to
+                # store the post body in clear text.
+                text_input_enc=encrypt(post_message) if post_message else None,
                 image_path=None,
             )
             session.add(run)
@@ -272,6 +342,7 @@ async def enqueue_due_posts(
             await session.refresh(run)
 
             sp.last_fired_at = now
+            sp.last_error = None
             if sp.interval_seconds is None:
                 sp.status = "completed"
                 sp.next_fire_at = None
@@ -288,23 +359,18 @@ async def enqueue_due_posts(
             session.add(sp)
             await session.commit()
 
-            targets = json.loads(sp.targets_json or "[]")
-            page_ids = [t.split(":", 1)[1] for t in targets if t.startswith("page:")]
-            group_ids = [t.split(":", 1)[1] for t in targets if t.startswith("group:")]
-            personal_ids = [t.split(":", 1)[1] for t in targets if t.startswith("personal:")]
-
             from app.routers.page_tasks import _run_page_post_task
-            task_creator(
+            _track(task_creator(
                 _run_page_post_task(
                     run_id=str(run.id),
-                    page_ids=page_ids,
-                    group_ids=group_ids,
-                    personal_account_ids=personal_ids,
+                    page_ids=lists["page_ids"],
+                    group_ids=lists["group_ids"],
+                    personal_account_ids=lists["personal_account_ids"],
                     message=post_message,
                     link=post_link,
                     media_paths=post_media,
                 )
-            )
+            ), sp.id)
 
             results.append({
                 "scheduled_post_id": str(sp.id),
@@ -314,6 +380,24 @@ async def enqueue_due_posts(
             })
 
     return results
+
+
+def _track(task: object, sp_id: uuid.UUID) -> None:
+    """Hold the task and surface its failure instead of losing it silently."""
+    if not hasattr(task, "add_done_callback"):
+        return
+    _running_posts.add(task)
+
+    def _done(finished) -> None:
+        _running_posts.discard(finished)
+        try:
+            error = finished.exception()
+        except Exception:  # cancelled, or not a future after all
+            return
+        if error is not None:
+            logger.error("scheduled post %s failed while posting: %s", sp_id, error)
+
+    task.add_done_callback(_done)
 
 
 def _normalize_post_items(

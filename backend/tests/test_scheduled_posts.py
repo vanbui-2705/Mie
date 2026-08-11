@@ -13,7 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import current_user
 from app.db.postgres import get_session
 from app.main import app
-from app.models.sqlmodels import ScheduledPost, TaskRun, User
+from app.crypto import decrypt, encrypt
+from app.models.sqlmodels import (
+    FacebookAccount,
+    FacebookPage,
+    ScheduledPost,
+    TaskRun,
+    User,
+)
 from app.routers import scheduled_posts
 from app.services.scheduled_post_service import ScheduledPostService, enqueue_due_posts
 
@@ -35,6 +42,32 @@ async def _ensure_user(session: AsyncSession, user_id: uuid.UUID) -> None:
     if result.scalar_one_or_none() is None:
         session.add(User(id=user_id, username=f"test-{user_id.hex[:8]}", password_hash=None))
         await session.commit()
+
+
+async def _own_page(session: AsyncSession, user_id: uuid.UUID) -> FacebookPage:
+    """A page this user actually holds.
+
+    Schedules now refuse targets their owner does not own, so a placeholder
+    like "page:abc" no longer reaches the publisher. See
+    test_scheduled_post_targets.
+    """
+    account = FacebookAccount(
+        id=uuid.uuid4(), user_id=user_id, uid=f"uid-{uuid.uuid4().hex[:8]}",
+        user_token_enc=encrypt("t"),
+    )
+    session.add(account)
+    await session.flush()
+    page = FacebookPage(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        facebook_account_id=account.id,
+        page_id=f"page-{uuid.uuid4().hex[:8]}",
+        page_name="Own Page",
+        page_access_token_enc=encrypt("own-token"),
+    )
+    session.add(page)
+    await session.commit()
+    return page
 
 
 @pytest.mark.asyncio
@@ -93,12 +126,13 @@ async def test_pause_resume_and_list_for_user(session: AsyncSession, user_id: uu
 @pytest.mark.asyncio
 async def test_enqueue_due_posts_creates_task_run_without_running_real_job(session: AsyncSession, user_id: uuid.UUID) -> None:
     await _ensure_user(session, user_id)
+    page = await _own_page(session, user_id)
     now = datetime.now(timezone.utc)
     item = ScheduledPost(
         user_id=user_id,
         name="Due",
         action="post_page",
-        targets_json='["page:abc"]',
+        targets_json=f'["page:{page.id}"]',
         message="hello",
         max_threads=3,
         status="scheduled",
@@ -126,12 +160,13 @@ async def test_enqueue_due_posts_creates_task_run_without_running_real_job(sessi
 @pytest.mark.asyncio
 async def test_enqueue_due_posts_cycles_post_items(session: AsyncSession, user_id: uuid.UUID) -> None:
     await _ensure_user(session, user_id)
+    page = await _own_page(session, user_id)
     now = datetime.now(timezone.utc)
     item = await _service(session).create(
         user_id=user_id,
         name="Rotating posts",
         action="post_page",
-        targets=["page:abc"],
+        targets=[f"page:{page.id}"],
         message="first",
         link=None,
         media_paths=[],
@@ -165,14 +200,16 @@ async def test_enqueue_due_posts_cycles_post_items(session: AsyncSession, user_i
     assert fired_second[0]["post_item_index"] == 1
     assert first_run is not None
     assert second_run is not None
-    assert first_run.text_input_enc == "first"
-    assert second_run.text_input_enc == "second"
+    # Stored encrypted, like every other writer of this column.
+    assert decrypt(first_run.text_input_enc) == "first"
+    assert decrypt(second_run.text_input_enc) == "second"
     assert item.next_item_index == 0
 
 
 @pytest.mark.asyncio
 async def test_scheduled_posts_routes_exist(session: AsyncSession, user_id: uuid.UUID) -> None:
     await _ensure_user(session, user_id)
+    page = await _own_page(session, user_id)
     user = (await session.execute(select(User).where(User.id == user_id))).scalar_one()
     app.dependency_overrides[current_user] = lambda: user
     async def override_get_session():
@@ -185,7 +222,7 @@ async def test_scheduled_posts_routes_exist(session: AsyncSession, user_id: uuid
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             payload = {
                 "name": "Route smoke",
-                "targets": ["page:abc"],
+                "targets": [f"page:{page.id}"],
                 "post_items": [
                     {"message": "hello", "link": ""},
                     {"message": "hello 2", "link": "https://example.test"},

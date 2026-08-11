@@ -545,6 +545,10 @@ class ScheduledPost(Base):
         DateTime(timezone=True), nullable=True, default=None,
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="paused")
+    last_error: Mapped[Optional[str]] = mapped_column(
+        Text, nullable=True, default=None,
+        comment="Why the last fire was refused; NULL once it fires cleanly",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
