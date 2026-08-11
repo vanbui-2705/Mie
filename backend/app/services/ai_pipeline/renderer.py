@@ -53,6 +53,7 @@ def build_render_command(
     ass_path: str,
     font_dir: str,
     audio_path: str | None = None,
+    parallel: int | None = None,
 ) -> list[str]:
     vf = (
         f"crop={int(crop['crop_w'])}:{int(crop['crop_h'])}:{int(crop['x'])}:{int(crop['y'])},"
@@ -75,7 +76,7 @@ def build_render_command(
         "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-b:a", "128k",
-        "-threads", str(ffmpeg_threads()),
+        "-threads", str(ffmpeg_threads(parallel)),
         "-movflags", "+faststart",
         output_path,
     ]
@@ -89,6 +90,7 @@ async def burn_vertical(
     ass_path: str,
     font_dir: str,
     audio_path: str | None = None,
+    parallel: int | None = None,
 ) -> bool:
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     cmd = build_render_command(
@@ -98,6 +100,7 @@ async def burn_vertical(
         ass_path=ass_path,
         font_dir=font_dir,
         audio_path=audio_path,
+        parallel=parallel,
     )
     logger.info("rendering vertical clip -> %s", output_path)
     process = await procs.spawn(

@@ -41,14 +41,20 @@ def tts_slots() -> int:
     return max(1, int(settings.FLOW_TTS_SLOTS))
 
 
-def ffmpeg_threads() -> int:
+def ffmpeg_threads(parallel: int | None = None) -> int:
     """Threads for one ffmpeg process.
 
     Without this, N concurrent encodes each grab every core and spend their
     time fighting each other — concurrency that is slower than running them
     one at a time.
+
+    `parallel` is how many encodes will actually run at once. Dividing by the
+    slot limit instead would pin a two-clip job on a twelve-core box to one
+    thread per clip and leave ten cores idle: the limit is a ceiling on
+    concurrency, not a promise that the work exists to fill it.
     """
-    return max(1, math.floor((os.cpu_count() or 2) / cpu_slots()))
+    live = cpu_slots() if parallel is None else max(1, min(parallel, cpu_slots()))
+    return max(1, math.floor((os.cpu_count() or 2) / live))
 
 
 def reset_slots() -> None:

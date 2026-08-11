@@ -202,7 +202,9 @@ def test_build_slideshow_command_pins_the_thread_count(monkeypatch):
         font_dir="/fonts",
         escape_path=lambda p: p,
     )
-    assert cmd[cmd.index("-threads") + 1] == "4"
+    # One slideshow per job, so it takes the whole box rather than one slot's
+    # share of it.
+    assert cmd[cmd.index("-threads") + 1] == "8"
 
 
 def test_build_slideshow_command_rejects_an_empty_script():

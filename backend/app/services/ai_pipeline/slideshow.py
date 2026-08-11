@@ -91,7 +91,8 @@ def build_slideshow_command(
         "-r", str(FPS),
         # A partial narration must not cut off later visual scenes.
         "-t", f"{total_sec:.3f}",
-        "-threads", str(ffmpeg_threads()),
+        # One slideshow per job: nothing else is encoding beside it.
+        "-threads", str(ffmpeg_threads(1)),
         "-movflags", "+faststart",
         output_path,
     ]

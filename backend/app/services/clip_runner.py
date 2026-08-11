@@ -334,7 +334,8 @@ class ClipRunner:
                 async def render_and_tick(segment):
                     nonlocal done
                     row = await self._render_one(
-                        ctx, segment, local_source, work_dir, silences, font_name, temp_paths
+                        ctx, segment, local_source, work_dir, silences, font_name, temp_paths,
+                        parallel=len(segments),
                     )
                     done += 1
                     await self._publish_progress(ctx, "rendering", done / len(segments))
@@ -373,6 +374,8 @@ class ClipRunner:
         silences: list[tuple[float, float]],
         font_name: str,
         temp_paths: list[str],
+        *,
+        parallel: int = 1,
     ) -> dict:
         """Render one clip. Any failure returns an ERROR row instead of raising."""
         # Outside the try below, so a cancelled job propagates instead of being
@@ -452,6 +455,7 @@ class ClipRunner:
                     ass_path=ass_path,
                     font_dir=settings.CLIP_FONT_DIR,
                     audio_path=voice_path,
+                    parallel=parallel,
                 )
             if not burned:
                 raise RuntimeError("ffmpeg subtitle burn failed")

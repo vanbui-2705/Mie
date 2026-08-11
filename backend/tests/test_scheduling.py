@@ -37,6 +37,17 @@ def test_ffmpeg_threads_divides_the_cores_between_slots(monkeypatch):
     assert scheduling.ffmpeg_threads() == 2
 
 
+def test_ffmpeg_threads_follows_the_work_not_the_slot_limit(monkeypatch):
+    # Two clips on a twelve-core box: the other ten cores are nobody else's.
+    monkeypatch.setattr(scheduling.settings, "FLOW_CPU_SLOTS", 11)
+    monkeypatch.setattr(scheduling.os, "cpu_count", lambda: 12)
+    assert scheduling.ffmpeg_threads(2) == 6
+    assert scheduling.ffmpeg_threads(1) == 12
+    # More work than slots still divides by the slots, not by the work.
+    assert scheduling.ffmpeg_threads(50) == 1
+    assert scheduling.ffmpeg_threads() == 1
+
+
 def test_ffmpeg_threads_is_at_least_one(monkeypatch):
     monkeypatch.setattr(scheduling.settings, "FLOW_CPU_SLOTS", 16)
     monkeypatch.setattr(scheduling.os, "cpu_count", lambda: 2)
