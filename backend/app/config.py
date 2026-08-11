@@ -120,6 +120,11 @@ class Settings(BaseSettings):
     # sequential (51s / 76s / 69s median over a 10-minute slice, 3 reps each).
     # Raise it only together with a version bump that benchmarks better.
     ASR_BATCH_SIZE: int = 0
+    # Empty means detect from the first region. Set it ("vi", "en", …) when the
+    # sources are always one language: whisper-small identifies a language from
+    # a single 20s slice, and it gets accented speech wrong often enough that a
+    # whole job can come back in the wrong one.
+    ASR_LANGUAGE: str = ""
     SCORING_BACKEND: str = "gemini"     # gemini | ollama | claude | heuristic
     CLIP_PREFILTER_MAX_REGIONS: int = 30
     CLIP_PREFILTER_MIN_REGION_SEC: float = 20.0
