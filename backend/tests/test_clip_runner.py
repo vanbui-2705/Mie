@@ -43,7 +43,7 @@ def fake_pipeline(monkeypatch, tmp_path: Path):
         "prefilter_max_regions": [],
     }
 
-    async def fake_resolve(source_type, source_ref, work_dir, job_id):
+    async def fake_resolve(source_type, source_ref, work_dir, job_id, on_progress=None):
         path = tmp_path / "source.mp4"
         path.write_bytes(b"video-bytes")
         return runner_mod.ResolvedSource(
@@ -160,7 +160,9 @@ async def test_runner_completes_and_persists_clips(session, session_factory, use
     assert all(c.clipspec["version"] == 2 for c in clips)
     assert all(Path(c.output_ref).exists() for c in clips)
 
-    phases = [d["phase"] for ch, et, d in published if et == "phase"]
+    # Intra-phase ticks share the "phase" event type; only the transitions
+    # (the ones with no progress fraction) are the phase sequence.
+    phases = [d["phase"] for ch, et, d in published if et == "phase" and "progress" not in d]
     assert phases == ["analyzing", "scoring", "rendering"]
     assert any(et == "done" for _, et, _ in published)
 
@@ -204,7 +206,7 @@ async def test_runner_isolates_a_single_failing_clip(session, session_factory, u
 async def test_runner_marks_error_when_source_cannot_be_resolved(session, session_factory, user_id, fake_pipeline, monkeypatch):
     from app.services.ai_pipeline.source import SourceUnavailable
 
-    async def failing_resolve(source_type, source_ref, work_dir, job_id):
+    async def failing_resolve(source_type, source_ref, work_dir, job_id, on_progress=None):
         raise SourceUnavailable("download failed: private video")
 
     monkeypatch.setattr(runner_mod, "resolve_source_audio_first", failing_resolve)
@@ -421,3 +423,19 @@ async def test_the_cache_is_bypassed_when_disabled(
 
     assert calls["asr"] == 2
 
+
+async def test_phase_events_carry_progress(session, session_factory, user_id, fake_pipeline):
+    # A 15-minute job with a bar that never moves reads as a hung job.
+    published = []
+
+    async def publish(channel, event_type, data):
+        published.append((channel, event_type, data))
+
+    job = await _make_job(session, user_id)
+    await runner_mod.ClipRunner(session_factory=session_factory, publish=publish).run(str(job.id))
+
+    phase_events = [e for e in published if e[1] == "phase"]
+    assert any("progress" in e[2] for e in phase_events)
+    for _channel, _kind, body in phase_events:
+        if "progress" in body:
+            assert 0.0 <= body["progress"] <= 1.0

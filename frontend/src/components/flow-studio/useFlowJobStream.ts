@@ -10,7 +10,7 @@ import { flowEventsUrl } from "@/lib/flow-api";
  * differ only by which optional field is present (see services/clip_runner.py).
  */
 export type FlowJobEvent =
-  | { type: "phase"; phase: string }
+  | { type: "phase"; phase: string; progress?: number }
   | { type: "clip_ready"; rank: number }
   | { type: "done" }
   | { type: "error"; error: string };
@@ -60,7 +60,14 @@ export function useFlowJobStream(jobId: string | null, onEvent: (event: FlowJobE
           }
           // The channel carries every job of this user; ignore the other ones.
           if (payload.job_id !== jobId) return;
-          if (name === "phase") handlerRef.current({ type: "phase", phase: String(payload.phase ?? "") });
+          if (name === "phase")
+            handlerRef.current({
+              type: "phase",
+              phase: String(payload.phase ?? ""),
+              // Absent on a phase transition, present on an intra-phase tick.
+              progress:
+                typeof payload.progress === "number" ? payload.progress : undefined,
+            });
           else if (name === "clip_ready") handlerRef.current({ type: "clip_ready", rank: Number(payload.rank ?? 0) });
           else if (name === "done") handlerRef.current({ type: "done" });
           else handlerRef.current({ type: "error", error: String(payload.error ?? "Job lỗi") });

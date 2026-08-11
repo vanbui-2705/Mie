@@ -117,6 +117,19 @@ class ClipRunner:
             "clip", "phase", {"user_id": ctx.user_id, "job_id": ctx.job_id, "phase": phase}
         )
 
+    async def _publish_progress(self, ctx: JobContext, phase: str, progress: float) -> None:
+        """Intra-phase tick. No DB write — the status has not changed."""
+        await self._publish(
+            "clip",
+            "phase",
+            {
+                "user_id": ctx.user_id,
+                "job_id": ctx.job_id,
+                "phase": phase,
+                "progress": round(max(0.0, min(1.0, progress)), 3),
+            },
+        )
+
     async def _record_source(self, ctx: JobContext, sha: str) -> None:
         async with self._session_factory() as session:
             job = (await session.execute(select(ClipJob).where(ClipJob.id == ctx.job_uuid))).scalar_one()
@@ -213,9 +226,13 @@ class ClipRunner:
         resolved: ResolvedSource | None = None
 
         try:
+            async def tick_download(fraction: float) -> None:
+                await self._publish_progress(ctx, "queued", fraction)
+
             with self._timer.stage("resolve_source"):
                 resolved = await resolve_source_audio_first(
-                    ctx.source_type, ctx.source_ref, work_dir, ctx.job_id
+                    ctx.source_type, ctx.source_ref, work_dir, ctx.job_id,
+                    on_progress=tick_download,
                 )
             if resolved.analysis_is_temp:
                 temp_paths.append(resolved.analysis_media)
@@ -259,8 +276,13 @@ class ClipRunner:
                 with self._timer.stage("silences"):
                     silences = detect_silences(track)
                 self._abort_point(ctx)
+                async def tick_asr(done: int, total: int) -> None:
+                    await self._publish_progress(ctx, "analyzing", done / max(1, total))
+
                 with self._timer.stage("asr"):
-                    transcript = await transcribe_regions(track, regions)
+                    transcript = await transcribe_regions(
+                        track, regions, on_progress=tick_asr
+                    )
                 if not transcript.regions:
                     raise RuntimeError("ASR produced no usable speech regions")
                 if settings.CLIP_ANALYSIS_CACHE_ENABLED:
@@ -307,16 +329,19 @@ class ClipRunner:
                 # gather, not a loop: the clips are independent, and the loop
                 # left every core but one idle while one clip encoded.
                 # `gather` preserves order, so rows stay in rank order.
-                rows = list(
-                    await asyncio.gather(
-                        *(
-                            self._render_one(
-                                ctx, segment, local_source, work_dir,
-                                silences, font_name, temp_paths,
-                            )
-                            for segment in segments
-                        )
+                done = 0
+
+                async def render_and_tick(segment):
+                    nonlocal done
+                    row = await self._render_one(
+                        ctx, segment, local_source, work_dir, silences, font_name, temp_paths
                     )
+                    done += 1
+                    await self._publish_progress(ctx, "rendering", done / len(segments))
+                    return row
+
+                rows = list(
+                    await asyncio.gather(*(render_and_tick(s) for s in segments))
                 )
             await self._save_clips(ctx, rows)
             await self._finish(ctx)

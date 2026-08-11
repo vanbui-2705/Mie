@@ -186,3 +186,21 @@ async def test_a_failing_region_is_still_skipped_in_batched_mode(monkeypatch, wa
     transcript = await asr_engine.transcribe_regions(load_track(wav_path), regions)
     assert len(transcript.regions) == 1
     assert transcript.regions[0].region.index == 1
+
+
+async def test_transcribe_regions_reports_progress(monkeypatch, wav_path: str):
+    model = FakeModel()
+    monkeypatch.setattr(asr_engine, "_get_model", lambda: model)
+    monkeypatch.setattr(asr_engine.settings, "ASR_BATCH_SIZE", 0)
+
+    seen: list[tuple[int, int]] = []
+
+    async def record(done: int, total: int) -> None:
+        seen.append((done, total))
+
+    regions = [
+        HotRegion(index=i, start_sec=i * 10.0, end_sec=i * 10.0 + 5.0, energy=-10.0)
+        for i in range(3)
+    ]
+    await asr_engine.transcribe_regions(load_track(wav_path), regions, on_progress=record)
+    assert seen == [(1, 3), (2, 3), (3, 3)]

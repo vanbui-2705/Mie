@@ -30,6 +30,17 @@ const PERCENT: Record<string, number> = {
   cancelled: 100,
 };
 
+// Where each phase ends, so an in-phase fraction can be interpolated instead of
+// leaving the bar frozen for the ten minutes a long job spends in ASR.
+const PHASE_END: Record<string, number> = {
+  queued: 30,
+  analyzing: 60,
+  scripting: 55,
+  scoring: 85,
+  gathering: 85,
+  rendering: 100,
+};
+
 const TERMINAL: ClipJob["status"][] = ["DONE", "ERROR", "CANCELLED"];
 
 function phaseFromStatus(status: ClipJob["status"]): string {
@@ -47,6 +58,7 @@ function phaseFromStatus(status: ClipJob["status"]): string {
 
 export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: (job: ClipJob) => void }) {
   const [phase, setPhase] = useState("queued");
+  const [progress, setProgress] = useState(0);
   const [readyCount, setReadyCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const finishedRef = useRef(false);
@@ -67,8 +79,10 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
   }, [jobId, onFinished]);
 
   const { connected } = useFlowJobStream(jobId, (event) => {
-    if (event.type === "phase") setPhase(event.phase);
-    else if (event.type === "clip_ready") setReadyCount((n) => n + 1);
+    if (event.type === "phase") {
+      setPhase(event.phase);
+      setProgress(typeof event.progress === "number" ? event.progress : 0);
+    } else if (event.type === "clip_ready") setReadyCount((n) => n + 1);
     else if (event.type === "done") {
       setPhase("done");
       void finish();
@@ -91,6 +105,8 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
         const job = await getClipJob(jobId);
         if (cancelled) return;
         setPhase(phaseFromStatus(job.status));
+        // The poll knows the phase, never the fraction inside it.
+        setProgress(0);
         if (TERMINAL.includes(job.status)) {
           if (job.error) setError(describeFlowError(job.error));
           if (!finishedRef.current) {
@@ -112,7 +128,9 @@ export function JobProgress({ jobId, onFinished }: { jobId: string; onFinished: 
     };
   }, [jobId, onFinished]);
 
-  const percent = PERCENT[phase] ?? 5;
+  const floor = PERCENT[phase] ?? 5;
+  const ceiling = PHASE_END[phase] ?? floor;
+  const percent = Math.round(floor + (ceiling - floor) * progress);
   const isError = phase === "error" || phase === "cancelled";
 
   return (

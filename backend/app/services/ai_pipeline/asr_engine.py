@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -102,6 +102,7 @@ async def transcribe_regions(
     regions: Sequence[HotRegion],
     *,
     language: str | None = None,
+    on_progress: "Callable[[int, int], Awaitable[None]] | None" = None,
 ) -> Transcript:
     """Transcribe each hot region. When `regions` is empty the whole track is
     treated as a single region (prefilter found nothing — better slow than empty)."""
@@ -116,33 +117,38 @@ async def transcribe_regions(
 
     detected_language = language or "unknown"
     out: list[RegionTranscript] = []
-    for region in targets:
+    # A skipped or failed region still finished, so the tick has to fire on
+    # every path: freezing the bar on exactly the run that went wrong is the
+    # worst time to freeze it. That is why the body is one if/else, not
+    # a chain of `continue`s.
+    for index, region in enumerate(targets):
         audio = slice_samples(samples, sample_rate, region)
         if audio.size == 0:
             logger.warning("region %d is empty, skipping", region.index)
-            continue
-        try:
-            text, words, region_language = await loop.run_in_executor(
-                None, _transcribe_slice, audio, language
-            )
-        except Exception:
-            logger.exception("ASR failed on region %d (%.1fs-%.1fs); skipping",
-                             region.index, region.start_sec, region.end_sec)
-            continue
+        else:
+            try:
+                text, words, region_language = await loop.run_in_executor(
+                    None, _transcribe_slice, audio, language
+                )
+            except Exception:
+                logger.exception("ASR failed on region %d (%.1fs-%.1fs); skipping",
+                                 region.index, region.start_sec, region.end_sec)
+            else:
+                if detected_language == "unknown":
+                    detected_language = region_language
+                shifted = tuple(
+                    Word(
+                        start=round(w.start + region.start_sec, 3),
+                        end=round(w.end + region.start_sec, 3),
+                        text=w.text,
+                    )
+                    for w in words
+                )
+                if text or shifted:
+                    out.append(RegionTranscript(region=region, text=text, words=shifted))
 
-        if detected_language == "unknown":
-            detected_language = region_language
-        shifted = tuple(
-            Word(
-                start=round(w.start + region.start_sec, 3),
-                end=round(w.end + region.start_sec, 3),
-                text=w.text,
-            )
-            for w in words
-        )
-        if not text and not shifted:
-            continue
-        out.append(RegionTranscript(region=region, text=text, words=shifted))
+        if on_progress is not None:
+            await on_progress(index + 1, len(targets))
 
     logger.info("ASR produced %d/%d usable regions (language=%s)",
                 len(out), len(targets), detected_language)

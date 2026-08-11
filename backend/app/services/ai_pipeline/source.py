@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,11 +105,37 @@ def build_audio_download_command(url: str, output_path: str) -> list[str]:
     ]
 
 
-async def _download_video(url: str, output_path: str) -> str:
-    code, stderr = await _run(build_download_command(url, output_path))
-    if code != 0 or not Path(output_path).is_file():
+async def _download_video(url: str, output_path: str, on_progress=None) -> str:
+    if on_progress is None:
+        # No listener, no reason to parse output: keep the plain `_run` path,
+        # which is also the one tests/test_source.py stubs.
+        code, stderr = await _run(build_download_command(url, output_path))
+        if code != 0 or not Path(output_path).is_file():
+            raise SourceUnavailable(
+                f"download failed: {stderr.strip()[-500:] or 'unknown error'}"
+            )
+        return output_path
+
+    # --no-progress suppresses the percentage entirely; --newline makes each
+    # update its own line so it can be read without a terminal.
+    cmd = [arg for arg in build_download_command(url, output_path) if arg != "--no-progress"]
+    cmd += ["--newline"]
+    try:
+        process = await procs.spawn(
+            cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+    except FileNotFoundError as exc:
+        raise SourceUnavailable(f"{cmd[0]} is not installed on this host") from exc
+    if process.stdout is not None:
+        pattern = re.compile(r"\[download\]\s+([\d.]+)%")
+        async for raw in process.stdout:
+            match = pattern.search(raw.decode(errors="replace"))
+            if match:
+                await on_progress(min(1.0, float(match.group(1)) / 100.0))
+    _, stderr_bytes = await procs.communicate(process)
+    if process.returncode != 0 or not Path(output_path).is_file():
         raise SourceUnavailable(
-            f"download failed: {stderr.strip()[-500:] or 'unknown error'}"
+            f"download failed: {stderr_bytes.decode(errors='replace').strip()[-500:] or 'unknown error'}"
         )
     return output_path
 
@@ -118,6 +145,7 @@ async def resolve_source_audio_first(
     source_ref: str,
     work_dir: Path,
     job_id: str,
+    on_progress=None,
 ) -> ResolvedSource:
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -139,7 +167,9 @@ async def resolve_source_audio_first(
             return ResolvedSource(
                 analysis_media=audio_path, analysis_is_temp=True,
                 video_path=None,
-                video_task=asyncio.create_task(_download_video(source_ref, video_path)),
+                video_task=asyncio.create_task(
+                    _download_video(source_ref, video_path, on_progress)
+                ),
                 video_is_temp=True,
             )
         # Some sites have no audio-only format, some rate-limit the second
@@ -149,7 +179,7 @@ async def resolve_source_audio_first(
             job_id, stderr.strip()[-200:] or "no output",
         )
 
-    path = await _download_video(source_ref, video_path)
+    path = await _download_video(source_ref, video_path, on_progress)
     return ResolvedSource(
         analysis_media=path, analysis_is_temp=True,
         video_path=path, video_task=None, video_is_temp=True,
