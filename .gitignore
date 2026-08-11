@@ -54,3 +54,6 @@ backend/scripts/test_video.mp4
 
 # Baseline media for the latency eval harness. Large, machine-local.
 backend/samples/
+
+# Scratch dir for eval logs and captured SSE traces. Holds session tokens.
+.codex-tmp/
