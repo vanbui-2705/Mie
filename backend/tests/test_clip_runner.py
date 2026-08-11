@@ -363,3 +363,61 @@ async def test_one_failing_clip_does_not_fail_the_job(session, session_factory, 
     statuses = {c.rank: c.status for c in (await session.execute(select(Clip))).scalars()}
     assert statuses[1] == ClipStatus.READY
     assert statuses[2] == ClipStatus.ERROR
+
+
+async def _run_two_jobs_on_one_source(session, session_factory, user_id) -> None:
+    async def publish(channel, event_type, data):
+        return None
+
+    for _ in range(2):
+        job = await _make_job(session, user_id)
+        await runner_mod.ClipRunner(
+            session_factory=session_factory, publish=publish
+        ).run(str(job.id))
+
+
+async def test_a_cache_hit_skips_extract_prefilter_and_asr(
+    session, session_factory, user_id, fake_pipeline, monkeypatch
+):
+    """The payoff: re-running a source with new instructions costs no ASR."""
+    calls = {"extract": 0, "asr": 0}
+
+    async def counting_extract(video_path, audio_path):
+        calls["extract"] += 1
+        Path(audio_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(audio_path).write_bytes(b"wav")
+        return True
+
+    async def counting_asr(track, regions, **kwargs):
+        calls["asr"] += 1
+        return Transcript(language="en", regions=(
+            RegionTranscript(region=regions[0], text="hello", words=(Word(0.0, 0.5, "hello"),)),
+        ))
+
+    monkeypatch.setattr(runner_mod, "extract_audio", counting_extract)
+    monkeypatch.setattr(runner_mod, "transcribe_regions", counting_asr)
+
+    await _run_two_jobs_on_one_source(session, session_factory, user_id)
+
+    assert calls["extract"] == 1
+    assert calls["asr"] == 1
+
+
+async def test_the_cache_is_bypassed_when_disabled(
+    session, session_factory, user_id, fake_pipeline, monkeypatch
+):
+    calls = {"asr": 0}
+
+    async def counting_asr(track, regions, **kwargs):
+        calls["asr"] += 1
+        return Transcript(language="en", regions=(
+            RegionTranscript(region=regions[0], text="hello", words=(Word(0.0, 0.5, "hello"),)),
+        ))
+
+    monkeypatch.setattr(runner_mod.settings, "CLIP_ANALYSIS_CACHE_ENABLED", False)
+    monkeypatch.setattr(runner_mod, "transcribe_regions", counting_asr)
+
+    await _run_two_jobs_on_one_source(session, session_factory, user_id)
+
+    assert calls["asr"] == 2
+

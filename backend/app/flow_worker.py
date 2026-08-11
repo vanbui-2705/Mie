@@ -48,10 +48,11 @@ async def run_retention_sweeper() -> None:
         except Exception:
             logger.exception("retention sweep failed")
             continue
-        if summary["cancelled"] or summary["purged"]:
+        if summary["cancelled"] or summary["purged"] or summary["analysis_purged"]:
             logger.info(
-                "retention sweep: cancelled=%d purged=%d files=%d bytes=%d",
-                summary["cancelled"], summary["purged"], summary["files"], summary["bytes"],
+                "retention sweep: cancelled=%d purged=%d files=%d bytes=%d analysis=%d",
+                summary["cancelled"], summary["purged"], summary["files"],
+                summary["bytes"], summary["analysis_purged"],
             )
 
 

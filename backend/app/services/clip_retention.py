@@ -26,6 +26,7 @@ from sqlalchemy import delete, select
 
 from app.config import settings
 from app.models.clip_models import Clip, ClipEdit, ClipJob, ClipJobStatus, ClipSourceType
+from app.services.ai_pipeline.analysis_cache import purge_expired
 
 logger = logging.getLogger("flowmeta.clip_retention")
 
@@ -135,7 +136,7 @@ async def sweep_once(session_factory, *, now: datetime | None = None) -> dict:
     """One retention pass. Safe to call on an idle system."""
     now = now or datetime.now(timezone.utc)
     cutoff = now - timedelta(seconds=settings.CLIP_SESSION_GRACE_SECONDS)
-    summary = {"cancelled": 0, "purged": 0, "files": 0, "bytes": 0}
+    summary = {"cancelled": 0, "purged": 0, "files": 0, "bytes": 0, "analysis_purged": 0}
 
     async with session_factory() as session:
         candidates = (
@@ -179,6 +180,11 @@ async def sweep_once(session_factory, *, now: datetime | None = None) -> dict:
 
         await session.commit()
 
+    # Transcripts outlive the jobs that produced them by design - that is what
+    # makes a re-run free - so they need their own TTL.
+    summary["analysis_purged"] = await purge_expired(
+        session_factory, settings.CLIP_ANALYSIS_TTL_DAYS
+    )
     return summary
 
 

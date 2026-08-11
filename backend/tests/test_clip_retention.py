@@ -86,7 +86,9 @@ async def test_sweep_keeps_a_job_inside_the_grace_window(session, session_factor
 
     summary = await clip_retention.sweep_once(session_factory)
 
-    assert summary == {"cancelled": 0, "purged": 0, "files": 0, "bytes": 0}
+    assert summary == {
+        "cancelled": 0, "purged": 0, "files": 0, "bytes": 0, "analysis_purged": 0,
+    }
     assert all(f.exists() for f in files)
     assert await session.get(ClipJob, job.id) is not None
 
@@ -191,3 +193,34 @@ async def test_is_cancelled(session, session_factory, user_id, upload_dir):
     assert await clip_retention.is_cancelled(session_factory, job.id) is True
     # A job that no longer exists counts as cancelled: nothing to produce for.
     assert await clip_retention.is_cancelled(session_factory, _uuid.uuid4()) is True
+
+
+async def test_sweep_purges_expired_analysis_rows(session_factory, user_id):
+    from app.models.clip_models import ClipAnalysis
+    from app.services.ai_pipeline import analysis_cache
+    from app.services.ai_pipeline.types import HotRegion, RegionTranscript, Transcript, Word
+
+    # Copied from tests/test_analysis_cache.py: tests/ is not a package.
+    region = HotRegion(index=0, start_sec=12.5, end_sec=42.5, energy=-11.25)
+    transcript = Transcript(
+        language="vi",
+        regions=(
+            RegionTranscript(
+                region=region,
+                text="xin chào",
+                words=(Word(start=12.5, end=13.0, text="xin"), Word(start=13.0, end=13.6, text="chào")),
+            ),
+        ),
+    )
+
+    await analysis_cache.put_analysis(
+        session_factory, cache_key="old", owner_id=str(user_id),
+        transcript=transcript, silences=[],
+    )
+    async with session_factory() as s:
+        row = (await s.execute(select(ClipAnalysis))).scalar_one()
+        row.last_used_at = datetime.now(timezone.utc) - timedelta(days=90)
+        await s.commit()
+
+    summary = await clip_retention.sweep_once(session_factory)
+    assert summary["analysis_purged"] == 1

@@ -1,0 +1,55 @@
+{
+  "source": "baseline.mp4",
+  "source_sha256": "08e9343bfd277b10baf695eaf930559648672ef6b582951fd17bc800e7b2375c",
+  "git_rev": "dbcb87a",
+  "stages": {
+    "extract": 4.407,
+    "decode_audio": 0.107,
+    "prefilter": 0.215,
+    "asr": 299.46,
+    "scoring": 0.003,
+    "render": 169.748
+  },
+  "total_sec": 473.94,
+  "peak_rss_kb": null,
+  "clips": [
+    {
+      "rank": 1,
+      "start_sec": 1889.267,
+      "end_sec": 1919.267,
+      "subtitle_text": "Thế nhưng, sự hỗn loạn tột cùng ấy cũng nhanh chóng được lắng xuống nhờ sự xuất hiện kịp thời của những anh hùng. Cùng với đó, việc khai thác các link thạch thu hoạch từ xác lũ quái vật đã mở ra một kỷ nguyên mới, nguồn link thạch này hoàn toàn có thể thay thế cho các dạng năng lượng truyền thống. Kể từ đó, mọi quốc gia trên thế giới đều rồn toàn lực để xây dựng các cộng dịch chuyển quanh khai nước biến toàn bộ cấu trúc công nghiệp toàn cầu xoay quay."
+    },
+    {
+      "rank": 2,
+      "start_sec": 666.967,
+      "end_sec": 696.967,
+      "subtitle_text": "còn giọt máu vì kinh hoàng. Đối diện với sự hoang mang của gã đặc vụ, tâm trí Đô Dhuân khẽ lứt qua những kiến thức cơ bản về thế giới mới này. Đó là những cánh cổng kết nối với dị giới, nơi lũ quái vật liên tục tràn ra trên toàn cầu. Những phụ phẩm thu được từ việc san lùng chúng đã trở thành nguồn năng lượng mới vô cùng quý giá. Chính vì vậy, chính phủ các nước luôn kiểm soát nghiêm ngặt lối ra vào của các cánh cổng để quản lý lưu."
+    },
+    {
+      "rank": 3,
+      "start_sec": 1589.767,
+      "end_sec": 1619.767,
+      "subtitle_text": "trong cuộc đời khi cậu mới lên 7 tuổi và cậu hiếm khi được bước chân đến nhà của cha mình. Suốt hơn 10 năm ròng giá, Đô Dhuân đã phải sống trong sự phân biệt đối xử và khinh miệt tột cùng. Bi kịch lên đến đỉnh điểm khi người vợ hợp pháp của cha cậu sinh thêm một cậu con trai khiến cậu hoàn toàn bị bỏ rơi. Sau đó, Đô Dhuân bị đuổi cổ ra khỏi nhà và phải rọn đến sống cùng với cô em kế của mình tại nhà Ba Nội."
+    }
+  ],
+  "metrics": {
+    "video": "samples/baseline.mp4",
+    "duration_sec": 2400.0,
+    "timings_sec": {
+      "extract": 4.41,
+      "decode_audio": 0.11,
+      "prefilter": 0.22,
+      "asr": 299.46,
+      "scoring": 0.0,
+      "render": 169.75
+    },
+    "total_sec": 473.94,
+    "realtime_factor": 0.197,
+    "hot_region_count": 30,
+    "hot_region_coverage": 0.362,
+    "hot_region_recall": null,
+    "clips_selected": 3,
+    "mid_word_cut_rate": 0.0,
+    "language": "vi"
+  }
+}

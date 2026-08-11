@@ -24,6 +24,11 @@ from sqlalchemy import select
 from app.config import settings
 from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipSourceType, ClipStatus
 from app.services.ai_pipeline.asr_engine import transcribe_regions
+from app.services.ai_pipeline.analysis_cache import (
+    build_cache_key,
+    get_analysis,
+    put_analysis,
+)
 from app.services.ai_pipeline.audio import load_track
 from app.services.ai_pipeline.crop import compute_crop_path
 from app.services.ai_pipeline.cutter import (
@@ -218,29 +223,55 @@ class ClipRunner:
             self._abort_point(ctx)
 
             # ---- ANALYZING: audio, prefilter, ASR ----
-            await self._set_phase(ctx, ClipJobStatus.ANALYZING, "analyzing")
-            with self._timer.stage("extract_audio"):
-                if not await extract_audio(resolved.analysis_media, audio_path):
-                    raise RuntimeError("failed to extract audio from the source video")
-
-            with self._timer.stage("decode_audio"):
-                track = load_track(audio_path)
-
-            with self._timer.stage("prefilter"):
-                regions = detect_hot_regions(
-                    track,
-                    min_region_sec=settings.CLIP_PREFILTER_MIN_REGION_SEC,
-                    max_region_sec=settings.CLIP_PREFILTER_MAX_REGION_SEC,
-                    max_regions=min(
-                        settings.CLIP_PREFILTER_MAX_REGIONS,
-                        max(8, ctx.top_n * 4),
-                    ),
+            prefilter_params = {
+                "min_region_sec": settings.CLIP_PREFILTER_MIN_REGION_SEC,
+                "max_region_sec": settings.CLIP_PREFILTER_MAX_REGION_SEC,
+                "max_regions": min(
+                    settings.CLIP_PREFILTER_MAX_REGIONS, max(8, ctx.top_n * 4)
+                ),
+            }
+            # Hashing the media the ANALYSIS reads, not the video: for a link the
+            # video is still downloading, and the transcript depends on the audio
+            # anyway.
+            with self._timer.stage("hash_source"):
+                cache_key = build_cache_key(
+                    owner_id=ctx.user_id,
+                    audio_sha256=sha256_file(resolved.analysis_media),
+                    prefilter=prefilter_params,
                 )
-            with self._timer.stage("silences"):
-                silences = detect_silences(track)
-            self._abort_point(ctx)
-            with self._timer.stage("asr"):
-                transcript = await transcribe_regions(track, regions)
+
+            await self._set_phase(ctx, ClipJobStatus.ANALYZING, "analyzing")
+            cached = (
+                await get_analysis(self._session_factory, cache_key)
+                if settings.CLIP_ANALYSIS_CACHE_ENABLED
+                else None
+            )
+            if cached is not None:
+                transcript, silences = cached
+            else:
+                with self._timer.stage("extract_audio"):
+                    if not await extract_audio(resolved.analysis_media, audio_path):
+                        raise RuntimeError("failed to extract audio from the source video")
+                with self._timer.stage("decode_audio"):
+                    track = load_track(audio_path)
+                with self._timer.stage("prefilter"):
+                    regions = detect_hot_regions(track, **prefilter_params)
+                with self._timer.stage("silences"):
+                    silences = detect_silences(track)
+                self._abort_point(ctx)
+                with self._timer.stage("asr"):
+                    transcript = await transcribe_regions(track, regions)
+                if not transcript.regions:
+                    raise RuntimeError("ASR produced no usable speech regions")
+                if settings.CLIP_ANALYSIS_CACHE_ENABLED:
+                    await put_analysis(
+                        self._session_factory,
+                        cache_key=cache_key,
+                        owner_id=ctx.user_id,
+                        transcript=transcript,
+                        silences=silences,
+                    )
+
             if not transcript.regions:
                 raise RuntimeError("ASR produced no usable speech regions")
 
