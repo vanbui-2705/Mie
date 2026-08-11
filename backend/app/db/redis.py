@@ -15,6 +15,10 @@ async def get_redis() -> aioredis.Redis:
             settings.REDIS_URL,
             encoding="utf-8",
             decode_responses=True,
+            # Without a bound, a refused or black-holed Redis makes every caller
+            # wait through the driver's retries — including the rate limiter,
+            # which sits in front of the login form.
+            socket_connect_timeout=2,
         )
     return _redis_client
 

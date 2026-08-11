@@ -29,6 +29,24 @@ class Settings(BaseSettings):
     # process configured from .env signs with the same key as the containers.
     FLOWMETA_TOKEN_SECRET: str = ""
     FLOWMETA_DEFAULT_USER: str = "admin"
+    # Shared secret the one-shot /api/auth/bootstrap call must present. Empty
+    # disables the endpoint: on a fresh deployment it is otherwise a race for
+    # who sets the administrator password first, and the winner may be a
+    # stranger with a port scanner.
+    FLOWMETA_BOOTSTRAP_TOKEN: str = ""
+
+    # Throttling for the endpoints reachable without a token. Set a limit to 0
+    # to turn that counter off. Windows are seconds.
+    AUTH_LOGIN_MAX_ATTEMPTS: int = 10
+    AUTH_LOGIN_WINDOW_SEC: int = 300
+    AUTH_SIGNUP_MAX_ATTEMPTS: int = 5
+    AUTH_SIGNUP_WINDOW_SEC: int = 3600
+    # Only enable behind a proxy that overwrites X-Forwarded-For. Trusting the
+    # header when nothing sets it lets a caller pick their own rate-limit bucket.
+    TRUST_PROXY_HEADERS: bool = False
+    # Whether strangers may create their own accounts. Off means only an
+    # administrator can, through /api/auth/users.
+    ALLOW_PUBLIC_REGISTRATION: bool = True
 
     # Server
     HOST: str = "0.0.0.0"

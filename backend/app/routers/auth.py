@@ -6,7 +6,7 @@ import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +25,7 @@ from app.models.sqlmodels import PasswordResetToken, Role, User, UserRole, UserS
 from app.rbac import has_permission, require_permission
 from app.rbac_catalog import role_rank
 from app.services.permission_service import permission_codes_for_user, role_codes_for_user
+from app.services.rate_limit import check_rate_limit, clear_rate_limit, client_key
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -95,11 +96,37 @@ def _user_response(user: User) -> dict:
 
 
 @router.post("/bootstrap", response_model=dict)
-async def bootstrap_admin(body: dict, session: AsyncSession = Depends(get_session)):
+async def bootstrap_admin(
+    request: Request, body: dict, session: AsyncSession = Depends(get_session)
+):
+    """Set the administrator password once, on a brand new deployment.
+
+    This used to need nothing at all. On a fresh install with the port open,
+    the first caller to reach it owned the system — and reaching it takes a
+    port scan, not an invitation. It now demands the shared secret from the
+    environment, and refuses to run if that secret was never set.
+    """
+    expected = settings.FLOWMETA_BOOTSTRAP_TOKEN
+    if not expected:
+        raise HTTPException(
+            status_code=403,
+            detail="Bootstrap is disabled. Set FLOWMETA_BOOTSTRAP_TOKEN to enable it.",
+        )
+    await check_rate_limit(
+        client_key(request, scope="bootstrap"),
+        limit=settings.AUTH_SIGNUP_MAX_ATTEMPTS,
+        window_sec=settings.AUTH_SIGNUP_WINDOW_SEC,
+    )
+    supplied = request.headers.get("x-bootstrap-token", "")
+    if not secrets.compare_digest(supplied, expected):
+        raise HTTPException(status_code=403, detail="Invalid bootstrap token")
     user = await get_or_create_default_user(session)
     password = str(body.get("password") or "")
-    if not password:
-        raise HTTPException(status_code=400, detail="password is required")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
     if user.password_hash:
         raise HTTPException(status_code=409, detail="Admin password already configured")
     user.password_hash = hash_password(password)
@@ -114,11 +141,20 @@ async def bootstrap_status(session: AsyncSession = Depends(get_session)):
 
 
 @router.post("/login", response_model=dict)
-async def login(body: dict, session: AsyncSession = Depends(get_session)):
+async def login(request: Request, body: dict, session: AsyncSession = Depends(get_session)):
     username = str(body.get("username") or body.get("email") or "").strip()
     if "@" in username:
         username = username.lower()
     password = str(body.get("password") or "")
+    # Bucketed per client *and* per account name, so one attacker cannot lock
+    # every user out by hammering the shared address bucket, and one account
+    # cannot be sprayed from a single host.
+    throttle_key = client_key(request, scope="login", identity=username)
+    await check_rate_limit(
+        throttle_key,
+        limit=settings.AUTH_LOGIN_MAX_ATTEMPTS,
+        window_sec=settings.AUTH_LOGIN_WINDOW_SEC,
+    )
     result = await session.execute(select(User).where((User.username == username) | (User.email == username)))
     user = result.scalar_one_or_none()
     if user is not None and not user.password_hash:
@@ -127,6 +163,7 @@ async def login(body: dict, session: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if user.status != UserStatus.ACTIVE:
         raise HTTPException(status_code=403, detail="User account is disabled")
+    await clear_rate_limit(throttle_key)
     return {
         "access_token": create_token(user.id, user.token_version),
         "token_type": "bearer",
@@ -139,7 +176,16 @@ async def login(body: dict, session: AsyncSession = Depends(get_session)):
 
 
 @router.post("/register", response_model=dict, status_code=201)
-async def register(body: dict, session: AsyncSession = Depends(get_session)):
+async def register(request: Request, body: dict, session: AsyncSession = Depends(get_session)):
+    if not settings.ALLOW_PUBLIC_REGISTRATION:
+        raise HTTPException(
+            status_code=403, detail="Đăng ký tự do đang tắt. Liên hệ quản trị viên để được cấp tài khoản."
+        )
+    await check_rate_limit(
+        client_key(request, scope="signup"),
+        limit=settings.AUTH_SIGNUP_MAX_ATTEMPTS,
+        window_sec=settings.AUTH_SIGNUP_WINDOW_SEC,
+    )
     email = str(body.get("email") or "").strip().lower()
     username = str(body.get("username") or email.split("@", 1)[0]).strip()
     full_name = str(body.get("full_name") or "").strip() or None
@@ -173,7 +219,14 @@ async def register(body: dict, session: AsyncSession = Depends(get_session)):
 
 
 @router.post("/forgot-password", response_model=dict)
-async def forgot_password(body: dict, session: AsyncSession = Depends(get_session)):
+async def forgot_password(request: Request, body: dict, session: AsyncSession = Depends(get_session)):
+    # Every call here mints a token and, once mail is wired up, sends a message
+    # to somebody who did not ask for it. Same budget as signup.
+    await check_rate_limit(
+        client_key(request, scope="forgot"),
+        limit=settings.AUTH_SIGNUP_MAX_ATTEMPTS,
+        window_sec=settings.AUTH_SIGNUP_WINDOW_SEC,
+    )
     email = str(body.get("email") or "").strip().lower()
     user = (await session.execute(select(User).where(User.email == email))).scalar_one_or_none()
     response = {"message": "If the email exists, a reset link has been created."}
