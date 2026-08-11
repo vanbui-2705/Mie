@@ -1,0 +1,53 @@
+{
+  "source": "baseline.mp4",
+  "source_sha256": "08e9343bfd277b10baf695eaf930559648672ef6b582951fd17bc800e7b2375c",
+  "git_rev": "9fd8e5b",
+  "stages": {
+    "extract": 4.719,
+    "prefilter": 0.827,
+    "asr": 379.826,
+    "scoring": 0.003,
+    "render": 188.539
+  },
+  "total_sec": 573.914,
+  "peak_rss_kb": null,
+  "clips": [
+    {
+      "rank": 1,
+      "start_sec": 1889.267,
+      "end_sec": 1919.267,
+      "subtitle_text": "Thế nhưng, sự hỗn loạn tột cùng ấy cũng nhanh chóng được lắng xuống nhờ sự xuất hiện kịp thời của những anh hùng. Cùng với đó, việc khai thác các linh thạch thu hoạch từ xác lũ quái vật đã mở ra một kỷ nguyên mới, nguồn linh thạch này hoàn toàn có thể thay thế cho các dạng năng lượng truyền thống. Kể từ đó, mọi quốc gia trên thế giới đều rồn toàn lực để xây dựng các cộng dịch chuyển quanh khai nước biến toàn bộ cấu trúc công nghiệp toàn cầu xoay quanh khai."
+    },
+    {
+      "rank": 2,
+      "start_sec": 666.967,
+      "end_sec": 696.967,
+      "subtitle_text": "còn giọt máu vì kinh hoàng. Đối diện với sự hoang mang của gã đặc vụ, tâm trí Đô Dhuân khẽ lứt qua những kiến thức cơ bản về thế giới mới này. Đó là những cánh cổng kết nối với dị giới, nơi lũ quái vật liên tục tràn ra trên toàn cầu. Những phụ phẩm thu được từ việc san lùng chúng đã trở thành nguồn năng lượng mới vô cùng quý giá. Chính vì vậy, chính phủ các nước luôn kiểm soát nghiêm ngặt lối ra vào của các cánh cổng để quản lý lưu."
+    },
+    {
+      "rank": 3,
+      "start_sec": 1875.767,
+      "end_sec": 1905.767,
+      "subtitle_text": "Một biên cố kinh hoàng đã ập đến khi những khai nước không gian bị ẩn thình lính xuất hiện giữa bầu trời. Từ sau trong những vết nước đen tối đó, bày quái vật hung hãn không ngừng tràn ra và điên cuồng tàn sát loài người, để toàn bộ thế giới vào cảnh hỗn loạn và huy dịch cực điểm. Thế nhưng, sự hỗn loạn tột cùng ấy cũng nhanh chóng được lắng xuống nhờ sự xuất hiện kịp thời của những anh hùng. Cùng với đó, việc khai thác các lính thạch thu hợp,"
+    }
+  ],
+  "metrics": {
+    "video": "samples/baseline.mp4",
+    "duration_sec": 2400.0,
+    "timings_sec": {
+      "extract": 4.72,
+      "prefilter": 0.83,
+      "asr": 379.83,
+      "scoring": 0.0,
+      "render": 188.54
+    },
+    "total_sec": 573.91,
+    "realtime_factor": 0.239,
+    "hot_region_count": 30,
+    "hot_region_coverage": 0.362,
+    "hot_region_recall": null,
+    "clips_selected": 3,
+    "mid_word_cut_rate": 0.0,
+    "language": "vi"
+  }
+}
