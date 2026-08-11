@@ -286,4 +286,13 @@ async def select_clips(
         logger.warning("LLM returned no usable candidates; using heuristic tier")
         return heuristic_select(transcript, top_n=top_n, min_sec=min_sec, max_sec=max_sec)
 
-    return dedupe_and_rank(candidates, top_n)
+    kept = dedupe_and_rank(candidates, top_n)
+    # A job that asked for 3 and got 2 looks like a bug from the outside. Say
+    # where the missing one went: the model proposed fewer, or the overlap rule
+    # dropped it.
+    if len(kept) < top_n:
+        logger.info(
+            "scorer kept %d/%d clip(s): model returned %d item(s), %d usable",
+            len(kept), top_n, len(items), len(candidates),
+        )
+    return kept
