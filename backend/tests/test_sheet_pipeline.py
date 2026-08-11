@@ -174,3 +174,23 @@ async def test_invalid_ready_row_is_recorded_without_publication_job(
     assert source.status == "invalid"
     assert source.validation_error
     assert (await session.execute(select(PublicationJob))).scalar_one_or_none() is None
+
+
+def test_media_cell_keeps_commas_that_belong_to_the_url() -> None:
+    """A comma only separates URLs when the next one starts right after it.
+
+    Cloudinary and Drive both emit commas inside a path, and splitting on every
+    comma turned one valid URL into two broken ones.
+    """
+    from app.services.sheet_sync import _split_lines
+
+    assert _split_lines(
+        "https://res.cloudinary.test/upload/w_100,h_200/a.jpg"
+    ) == ["https://res.cloudinary.test/upload/w_100,h_200/a.jpg"]
+    assert _split_lines(
+        "https://a.test/1.jpg, https://b.test/2.jpg"
+    ) == ["https://a.test/1.jpg", "https://b.test/2.jpg"]
+    assert _split_lines("https://a.test/1.jpg\nhttps://b.test/2.jpg") == [
+        "https://a.test/1.jpg", "https://b.test/2.jpg",
+    ]
+    assert _split_lines("") == []

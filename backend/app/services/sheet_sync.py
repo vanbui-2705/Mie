@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
 import uuid
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
@@ -28,6 +30,12 @@ from app.models.sqlmodels import (
 from app.services.google_sheets import GoogleSheetsClient
 from app.services.rental_media import RentalMediaError, RentalMediaStore
 
+
+logger = logging.getLogger("flowmeta.sheet_sync")
+
+# One read covers this many rows. A sheet longer than this is not an error, but
+# the tail is invisible, so say so instead of silently ingesting a prefix.
+SHEET_READ_ROWS = 5000
 
 SHEET_HEADERS = [
     "external_id", "content", "media_urls", "link", "targets",
@@ -103,7 +111,7 @@ async def sync_sheet_campaign(
             credentials=snapshot["credentials"],
             spreadsheet_id=snapshot["spreadsheet_id"],
             sheet_name=snapshot["sheet_name"],
-            a1_range="A1:N5000",
+            a1_range=f"A1:N{SHEET_READ_ROWS}",
         )
     except Exception as exc:
         await _save_campaign_error(get_session, campaign_id, str(exc), now)
@@ -111,6 +119,11 @@ async def sync_sheet_campaign(
     if not rows:
         await _save_campaign_error(get_session, campaign_id, "Google Sheet is empty", now)
         raise SheetSyncError("Google Sheet is empty")
+    if len(rows) >= SHEET_READ_ROWS:
+        logger.warning(
+            "campaign %s filled the %s-row read window; rows past %s were not seen",
+            campaign_id, SHEET_READ_ROWS, SHEET_READ_ROWS,
+        )
 
     header = [str(value).strip().lower() for value in rows[0]]
     missing = [name for name in SHEET_HEADERS if name not in header]
@@ -415,7 +428,14 @@ def _cell(row: list, index: int) -> str:
 
 
 def _split_lines(value: str) -> list[str]:
-    return [part.strip() for part in value.replace(",", "\n").splitlines() if part.strip()]
+    """Split a media cell into URLs.
+
+    One per line is the documented form, and comma-separated is accepted too —
+    but a comma is legal inside a URL (Cloudinary and Drive both emit them), so
+    only a comma that starts the next URL counts as a separator.
+    """
+    parts = re.split(r"[\r\n]+|,(?=\s*https?://)", value)
+    return [part.strip().rstrip(",").strip() for part in parts if part.strip().strip(",").strip()]
 
 
 def _split_targets(value: str) -> list[str]:

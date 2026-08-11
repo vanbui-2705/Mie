@@ -45,6 +45,13 @@ from sqlalchemy import func, select
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
+    # uvicorn configures its own loggers and leaves the root one bare, so
+    # without this every logger under "flowmeta." writes into the void — which
+    # is why the scheduler could run for hours without printing a line.
+    logging.basicConfig(
+        level=getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     pm = ProxyManager()
     profile_mgr = ProfileManager()
 
@@ -120,11 +127,15 @@ async def _migrate_legacy_profiles(session) -> None:
 
 async def _scheduler_tick() -> None:
     log = logging.getLogger("flowmeta.scheduler")
+    ticks = 0
     while True:
         try:
             from app.services.sheet_sync import run_sheet_sync
             from app.services.sheet_post import SheetPostService
-            from app.services.sheet_writeback import run_sheet_writebacks
+            from app.services.sheet_writeback import (
+                recover_stale_writebacks,
+                run_sheet_writebacks,
+            )
             from app.services.rental_sync import run_rental_sync
             from app.services.rental_post import RentalPostService
             from app.services.rental_sheet_mirror import run_rental_sheet_mirror
@@ -141,6 +152,11 @@ async def _scheduler_tick() -> None:
             await _run_scheduler_service(
                 "publication_recovery",
                 recover_stale_publication_jobs(session_context),
+                log,
+            )
+            await _run_scheduler_service(
+                "writeback_recovery",
+                recover_stale_writebacks(session_context),
                 log,
             )
             await _run_scheduler_service(
@@ -168,6 +184,11 @@ async def _scheduler_tick() -> None:
             raise
         except Exception:
             log.exception("scheduler tick error")
+        # An idle tick logs nothing at all, so silence used to mean either "no
+        # work" or "the loop died" with no way to tell them apart.
+        ticks += 1
+        if ticks % 10 == 1:
+            log.info("scheduler alive, tick %s", ticks)
         await asyncio.sleep(max(5, settings.SCHEDULER_INTERVAL_SECONDS))
 
 
