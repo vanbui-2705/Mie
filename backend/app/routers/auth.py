@@ -11,7 +11,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import create_token, current_user, get_or_create_default_user, hash_password, verify_password
+from app.auth import (
+    create_token,
+    current_user,
+    get_or_create_default_user,
+    hash_password,
+    revoke_sessions,
+    verify_password,
+)
 from app.db.postgres import get_session
 from app.config import settings
 from app.models.sqlmodels import PasswordResetToken, Role, User, UserRole, UserStatus
@@ -22,6 +29,11 @@ from app.services.permission_service import permission_codes_for_user, role_code
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 ASSIGNABLE_ROLES = {"super_admin", "admin", "manager", "staff", "user"}
+
+# One rule for every path that sets a password. The admin endpoints used to
+# accept 6 characters while self-service registration demanded 8, so the
+# weakest password on the system was always the one an admin typed.
+MIN_PASSWORD_LENGTH = 8
 
 
 def _guard_target_rank(actor: User, target: User) -> None:
@@ -116,7 +128,7 @@ async def login(body: dict, session: AsyncSession = Depends(get_session)):
     if user.status != UserStatus.ACTIVE:
         raise HTTPException(status_code=403, detail="User account is disabled")
     return {
-        "access_token": create_token(user.id),
+        "access_token": create_token(user.id, user.token_version),
         "token_type": "bearer",
         "user": {
             "id": str(user.id),
@@ -136,8 +148,10 @@ async def register(body: dict, session: AsyncSession = Depends(get_session)):
         raise HTTPException(status_code=400, detail="Email không hợp lệ")
     if len(username) < 3:
         raise HTTPException(status_code=400, detail="Tên đăng nhập phải có ít nhất 3 ký tự")
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="Mật khẩu phải có ít nhất 8 ký tự")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400, detail=f"Mật khẩu phải có ít nhất {MIN_PASSWORD_LENGTH} ký tự"
+        )
     existing = (await session.execute(
         select(User).where((User.username == username) | (User.email == email))
     )).scalar_one_or_none()
@@ -151,7 +165,11 @@ async def register(body: dict, session: AsyncSession = Depends(get_session)):
         await session.rollback()
         raise HTTPException(status_code=409, detail="Email hoặc tên đăng nhập đã tồn tại") from None
     await session.refresh(user)
-    return {"access_token": create_token(user.id), "token_type": "bearer", "user": _user_response(user)}
+    return {
+        "access_token": create_token(user.id, user.token_version),
+        "token_type": "bearer",
+        "user": _user_response(user),
+    }
 
 
 @router.post("/forgot-password", response_model=dict)
@@ -179,8 +197,11 @@ async def forgot_password(body: dict, session: AsyncSession = Depends(get_sessio
 async def reset_password(body: dict, session: AsyncSession = Depends(get_session)):
     token = str(body.get("token") or "")
     password = str(body.get("password") or "")
-    if len(password) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     item = (await session.execute(select(PasswordResetToken).where(PasswordResetToken.token_hash == token_hash))).scalar_one_or_none()
     now = datetime.now(timezone.utc)
@@ -191,6 +212,9 @@ async def reset_password(body: dict, session: AsyncSession = Depends(get_session
     if user is None:
         raise HTTPException(status_code=400, detail="Reset token is invalid")
     user.password_hash = hash_password(password)
+    # Whoever was holding a token for this account loses it here. That is the
+    # whole point of resetting a password you think somebody else knows.
+    revoke_sessions(user)
     item.used_at = now
     await session.commit()
     return {"reset": True}
@@ -216,8 +240,11 @@ async def create_user(
     role = str(body.get("role") or "user").strip().lower()
     if not username:
         raise HTTPException(status_code=400, detail="username is required")
-    if len(password) < 6:
-        raise HTTPException(status_code=400, detail="password must be at least 6 characters")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"password must be at least {MIN_PASSWORD_LENGTH} characters",
+        )
     if role not in ASSIGNABLE_ROLES:
         raise HTTPException(status_code=400, detail="Unknown role")
     if role != "user" and not await has_permission(session, user, "permission:assign"):
@@ -280,9 +307,15 @@ async def update_user(
             raise HTTPException(status_code=400, detail="cannot disable current user")
         item.status = UserStatus(status_value)
     if password is not None and str(password):
-        if len(str(password)) < 6:
-            raise HTTPException(status_code=400, detail="password must be at least 6 characters")
+        if len(str(password)) < MIN_PASSWORD_LENGTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"password must be at least {MIN_PASSWORD_LENGTH} characters",
+            )
         item.password_hash = hash_password(str(password))
+        # An admin resetting somebody's password is usually containing an
+        # incident. Leaving that account's live tokens working would defeat it.
+        revoke_sessions(item)
     await session.commit()
     await session.refresh(item)
     return _user_response(item)

@@ -160,6 +160,12 @@ class User(Base):
     full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     avatar_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     password_hash: Mapped[Optional[str]] = mapped_column(Text, nullable=True, default=None)
+    # Bumped whenever the credentials change. Tokens carry the version they were
+    # minted at, so a password reset invalidates every session opened with the
+    # old password instead of leaving them alive for the rest of the week.
+    token_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
     role: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
     status: Mapped[UserStatus] = mapped_column(
         Enum(UserStatus, name="user_status", native_enum=False),

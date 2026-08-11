@@ -246,11 +246,11 @@ async def stream_events(
     if not token:
         raise HTTPException(status_code=401, detail="Authentication token is required")
     try:
-        user_id = parse_token(token)
-        if user_id is None:
+        claims = parse_token(token)
+        if claims is None:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
         async with session_context() as session:
-            user = await _load_user_by_id(session, user_id)
+            user = await _load_user_by_id(session, *claims)
             if user is None or user.status != UserStatus.ACTIVE:
                 raise HTTPException(status_code=401, detail="User not found or disabled")
     except HTTPException:

@@ -47,25 +47,40 @@ def verify_password(password: str, stored: str | None) -> bool:
         return False
 
 
-def create_token(user_id: uuid.UUID) -> str:
+def create_token(user_id: uuid.UUID, token_version: int = 0) -> str:
     exp = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
-    payload = f"{user_id}.{exp}"
+    payload = f"{user_id}.{exp}.{int(token_version)}"
     sig = hmac.new(TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
 
-def parse_token(token: str) -> uuid.UUID | None:
+def parse_token(token: str) -> tuple[uuid.UUID, int] | None:
+    """Return `(user_id, token_version)`, or None if the token is not usable.
+
+    Tokens minted before `token_version` existed carry three parts instead of
+    four and are rejected outright: accepting them as version 0 would hand
+    every pre-upgrade session a permanent exemption from revocation. The cost
+    is one forced re-login at deploy.
+    """
     try:
-        user_id, exp_raw, sig = token.split(".", 2)
-        payload = f"{user_id}.{exp_raw}"
+        user_id, exp_raw, version_raw, sig = token.split(".", 3)
+        payload = f"{user_id}.{exp_raw}.{version_raw}"
         expected = hmac.new(TOKEN_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected):
             return None
         if int(exp_raw) < int(datetime.now(timezone.utc).timestamp()):
             return None
-        return uuid.UUID(user_id)
+        return uuid.UUID(user_id), int(version_raw)
     except Exception:
         return None
+
+
+def revoke_sessions(user: User) -> None:
+    """Invalidate every token already issued for this account.
+
+    Call it wherever the credentials change. The caller commits.
+    """
+    user.token_version = (user.token_version or 0) + 1
 
 
 async def get_or_create_default_user(session: AsyncSession) -> User:
@@ -80,11 +95,16 @@ async def get_or_create_default_user(session: AsyncSession) -> User:
     return user
 
 
-async def _load_user_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
+async def _load_user_by_id(
+    session: AsyncSession, user_id: uuid.UUID, token_version: int
+) -> User | None:
     result = await session.execute(
         select(User).where(User.id == user_id, User.status == UserStatus.ACTIVE)
     )
-    return result.scalar_one_or_none()
+    user = result.scalar_one_or_none()
+    if user is None or (user.token_version or 0) != token_version:
+        return None
+    return user
 
 
 async def current_user(
@@ -95,10 +115,10 @@ async def current_user(
     if not auth_header.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
     token = auth_header[7:]
-    user_id = parse_token(token)
-    if user_id is None:
+    claims = parse_token(token)
+    if claims is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    user = await _load_user_by_id(session, user_id)
+    user = await _load_user_by_id(session, *claims)
     if user is None:
         raise HTTPException(status_code=401, detail="User not found or disabled")
     return user
@@ -119,10 +139,10 @@ async def current_user_media(
     token = auth_header[7:] if auth_header.startswith("Bearer ") else request.query_params.get("token")
     if not token:
         raise HTTPException(status_code=401, detail="Authentication token is required")
-    user_id = parse_token(token)
-    if user_id is None:
+    claims = parse_token(token)
+    if claims is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    user = await _load_user_by_id(session, user_id)
+    user = await _load_user_by_id(session, *claims)
     if user is None:
         raise HTTPException(status_code=401, detail="User not found or disabled")
     return user
@@ -135,8 +155,7 @@ async def optional_current_user(
     auth_header = request.headers.get("authorization", "")
     if not auth_header.startswith("Bearer "):
         return None
-    token = auth_header[7:]
-    user_id = parse_token(token)
-    if user_id is None:
+    claims = parse_token(auth_header[7:])
+    if claims is None:
         return None
-    return await _load_user_by_id(session, user_id)
+    return await _load_user_by_id(session, *claims)

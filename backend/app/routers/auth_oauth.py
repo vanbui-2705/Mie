@@ -126,7 +126,7 @@ async def oauth_callback(
 
     user_data = {"id": str(user.id), "username": user.username, "email": user.email, "role": user.role}
     encoded_user = base64.urlsafe_b64encode(json.dumps(user_data).encode()).decode().rstrip("=")
-    fragment = urlencode({"token": create_token(user.id), "user": encoded_user})
+    fragment = urlencode({"token": create_token(user.id, user.token_version), "user": encoded_user})
     return RedirectResponse(f"{settings.AUTH_FRONTEND_CALLBACK_URL}#{fragment}")
 
 
