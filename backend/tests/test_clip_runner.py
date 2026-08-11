@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -301,3 +302,64 @@ async def test_runner_deletes_the_temp_audio(session, session_factory, user_id, 
 
     leftovers = list((tmp_path / "clips").rglob("*.wav"))
     assert leftovers == []
+
+
+async def test_clips_render_concurrently(session, session_factory, user_id, fake_pipeline, monkeypatch):
+    from app.services.ai_pipeline import scheduling
+
+    monkeypatch.setattr(scheduling.settings, "FLOW_CPU_SLOTS", 4)
+    scheduling.reset_slots()
+
+    live = {"now": 0, "peak": 0}
+
+    async def slow_burn(input_path, output_path, **kwargs):
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+        await asyncio.sleep(0.03)
+        Path(output_path).write_bytes(b"rendered")
+        live["now"] -= 1
+        return True
+
+    monkeypatch.setattr(runner_mod, "burn_vertical", slow_burn)
+
+    async def publish(channel, event_type, data):
+        return None
+
+    job = await _make_job(session, user_id)
+    await runner_mod.ClipRunner(session_factory=session_factory, publish=publish).run(str(job.id))
+
+    assert live["peak"] == 2  # the fixture's fake_select_clips returns 2 segments
+
+
+async def test_clip_rows_keep_rank_order(session, session_factory, user_id, fake_pipeline):
+    # Concurrency must not shuffle the gallery: rank 1 is the top clip.
+    async def publish(channel, event_type, data):
+        return None
+
+    job = await _make_job(session, user_id)
+    await runner_mod.ClipRunner(session_factory=session_factory, publish=publish).run(str(job.id))
+
+    clips = (await session.execute(select(Clip).order_by(Clip.rank))).scalars().all()
+    assert [clip.rank for clip in clips] == [1, 2]
+
+
+async def test_one_failing_clip_does_not_fail_the_job(session, session_factory, user_id, fake_pipeline, monkeypatch):
+    async def burn_one_bad(input_path, output_path, **kwargs):
+        if output_path.endswith("_clip_2.mp4"):
+            return False
+        Path(output_path).write_bytes(b"rendered")
+        return True
+
+    monkeypatch.setattr(runner_mod, "burn_vertical", burn_one_bad)
+
+    async def publish(channel, event_type, data):
+        return None
+
+    job = await _make_job(session, user_id)
+    await runner_mod.ClipRunner(session_factory=session_factory, publish=publish).run(str(job.id))
+
+    await session.refresh(job)
+    assert job.status == ClipJobStatus.DONE
+    statuses = {c.rank: c.status for c in (await session.execute(select(Clip))).scalars()}
+    assert statuses[1] == ClipStatus.READY
+    assert statuses[2] == ClipStatus.ERROR

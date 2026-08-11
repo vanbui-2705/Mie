@@ -16,6 +16,7 @@ import httpx
 
 from app.config import settings
 from app.services.ai_pipeline import procs
+from app.services.ai_pipeline.scheduling import net_slot
 
 logger = logging.getLogger("flowmeta.ai_pipeline.stock")
 
@@ -117,7 +118,7 @@ async def fetch_stock_image(query: str, out_path: str) -> str | None:
     if not api_key:
         return None
     try:
-        async with httpx.AsyncClient(timeout=settings.STOCK_TIMEOUT_SECONDS) as client:
+        async with net_slot(), httpx.AsyncClient(timeout=settings.STOCK_TIMEOUT_SECONDS) as client:
             response = await client.get(
                 PEXELS_SEARCH_URL,
                 headers={"Authorization": api_key},
@@ -145,7 +146,7 @@ async def fetch_stock_image(query: str, out_path: str) -> str | None:
 async def fetch_commons_image(query: str, out_path: str) -> str | None:
     """Download a relevant Commons JPEG without requiring an API key."""
     try:
-        async with httpx.AsyncClient(
+        async with net_slot(), httpx.AsyncClient(
             timeout=settings.STOCK_TIMEOUT_SECONDS,
             headers={"User-Agent": COMMONS_USER_AGENT},
         ) as client:

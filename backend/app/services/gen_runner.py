@@ -25,6 +25,7 @@ from app.config import settings
 from app.models.clip_models import Clip, ClipJob, ClipJobStatus, ClipStatus
 from app.services.ai_pipeline.procs import kill_live, spawn, communicate
 from app.services.ai_pipeline.renderer import escape_filter_path, resolve_font_name
+from app.services.ai_pipeline.scheduling import cpu_slot
 from app.services.ai_pipeline.script_writer import VideoScript, write_script
 from app.services.ai_pipeline.slideshow import build_slideshow_command
 from app.services.ai_pipeline.stock_media import backdrop_source, resolve_backdrop
@@ -255,23 +256,33 @@ class GenRunner:
             )
 
             self._abort_point(ctx)
+
+            async def prepare_scene(i: int, scene) -> tuple[str, str]:
+                image = uploaded_image_for_scene(ctx.image_paths, i, len(script.scenes))
+                visual_source = "uploaded" if image else ""
+                if image and not os.path.isfile(image):
+                    raise RuntimeError(f"uploaded image is missing for scene {i + 1}")
+                if image is None:
+                    image = await resolve_backdrop(scene.image_query, work_dir, base, i)
+                    visual_source = backdrop_source(image) if image else ""
+                if image is None:
+                    raise RuntimeError(f"could not obtain a backdrop for scene {i + 1}")
+                return image, visual_source
+
+            with self._timer.stage("backdrops"):
+                # One scene's backdrop is one HTTP round trip; a serial loop paid
+                # them end to end. gather keeps the scene order.
+                prepared = await asyncio.gather(
+                    *(prepare_scene(i, scene) for i, scene in enumerate(script.scenes))
+                )
+
             backdrops: list[tuple[str, float]] = []
             visual_sources: list[str] = []
-            with self._timer.stage("backdrops"):
-                for i, scene in enumerate(script.scenes):
-                    image = uploaded_image_for_scene(ctx.image_paths, i, len(script.scenes))
-                    visual_source = "uploaded" if image else ""
-                    if image and not os.path.isfile(image):
-                        raise RuntimeError(f"uploaded image is missing for scene {i + 1}")
-                    if image is None:
-                        image = await resolve_backdrop(scene.image_query, work_dir, base, i)
-                        visual_source = backdrop_source(image) if image else ""
-                    if image is None:
-                        raise RuntimeError(f"could not obtain a backdrop for scene {i + 1}")
-                    if visual_source != "uploaded":
-                        temp_paths.append(image)
-                    backdrops.append((image, timeline.durations[i]))
-                    visual_sources.append(visual_source)
+            for i, (image, visual_source) in enumerate(prepared):
+                if visual_source != "uploaded":
+                    temp_paths.append(image)
+                backdrops.append((image, timeline.durations[i]))
+                visual_sources.append(visual_source)
 
             # ---- RENDERING ----
             self._abort_point(ctx)
@@ -351,10 +362,11 @@ class GenRunner:
             )
             logger.info("rendering gen video (%d scenes, %.1fs) -> %s",
                         len(backdrops), timeline.total, final_path)
-            process = await spawn(
-                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
-            _, stderr = await communicate(process)
+            async with cpu_slot():
+                process = await spawn(
+                    cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                _, stderr = await communicate(process)
             if process.returncode != 0:
                 raise RuntimeError(
                     f"ffmpeg slideshow failed: {stderr.decode(errors='replace')[-500:]}"

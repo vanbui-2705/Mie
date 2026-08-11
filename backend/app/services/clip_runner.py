@@ -35,6 +35,7 @@ from app.services.ai_pipeline.cutter import (
 from app.services.ai_pipeline.prefilter import detect_hot_regions, detect_silences
 from app.services.ai_pipeline.procs import kill_live
 from app.services.ai_pipeline.renderer import burn_vertical, resolve_font_name
+from app.services.ai_pipeline.scheduling import cpu_slot
 from app.services.ai_pipeline.scorer import select_clips
 from app.services.ai_pipeline.source import (
     ResolvedSource,
@@ -271,15 +272,21 @@ class ClipRunner:
             self._abort_point(ctx)
             await self._set_phase(ctx, ClipJobStatus.RENDERING, "rendering")
             font_name = resolve_font_name(settings.CLIP_FONT_DIR, settings.CLIP_SUBTITLE_FONT)
-            rows: list[dict] = []
             with self._timer.stage("render"):
-                for segment in segments:
-                    self._abort_point(ctx)
-                    rows.append(
-                        await self._render_one(
-                            ctx, segment, local_source, work_dir, silences, font_name, temp_paths
+                # gather, not a loop: the clips are independent, and the loop
+                # left every core but one idle while one clip encoded.
+                # `gather` preserves order, so rows stay in rank order.
+                rows = list(
+                    await asyncio.gather(
+                        *(
+                            self._render_one(
+                                ctx, segment, local_source, work_dir,
+                                silences, font_name, temp_paths,
+                            )
+                            for segment in segments
                         )
                     )
+                )
             await self._save_clips(ctx, rows)
             await self._finish(ctx)
         finally:
@@ -308,6 +315,10 @@ class ClipRunner:
         temp_paths: list[str],
     ) -> dict:
         """Render one clip. Any failure returns an ERROR row instead of raising."""
+        # Outside the try below, so a cancelled job propagates instead of being
+        # recorded as a failed clip. The render loop used to check this between
+        # clips; gathering removed that seam.
+        self._abort_point(ctx)
         base = f"{ctx.job_id}_clip_{segment.rank}"
         raw_path = str(work_dir / f"{base}_raw.mp4")
         ass_path = str(work_dir / f"{base}.ass")
@@ -348,7 +359,8 @@ class ClipRunner:
                 raise RuntimeError("ffmpeg stream copy failed")
             temp_paths.append(raw_path)
 
-            crop = await compute_crop_path(raw_path, 0.0, end - start)
+            async with cpu_slot():
+                crop = await compute_crop_path(raw_path, 0.0, end - start)
             Path(ass_path).write_text(
                 build_ass(segment, font_name=font_name), encoding="utf-8"
             )
@@ -370,14 +382,18 @@ class ClipRunner:
                 if voice_path:
                     temp_paths.append(voice_path)
 
-            if not await burn_vertical(
-                raw_path,
-                final_path,
-                crop=crop,
-                ass_path=ass_path,
-                font_dir=settings.CLIP_FONT_DIR,
-                audio_path=voice_path,
-            ):
+            # The slot is taken only around the CPU-bound calls: holding one
+            # across the TTS round trip above would idle a core on the network.
+            async with cpu_slot():
+                burned = await burn_vertical(
+                    raw_path,
+                    final_path,
+                    crop=crop,
+                    ass_path=ass_path,
+                    font_dir=settings.CLIP_FONT_DIR,
+                    audio_path=voice_path,
+                )
+            if not burned:
                 raise RuntimeError("ffmpeg subtitle burn failed")
 
             row["clipspec"] = generate_clipspec(
