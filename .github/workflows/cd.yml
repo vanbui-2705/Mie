@@ -52,7 +52,7 @@ jobs:
 
       - name: Install backend dependencies
         working-directory: backend
-        run: pip install --no-cache-dir -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Upgrade PostgreSQL schema
         working-directory: backend

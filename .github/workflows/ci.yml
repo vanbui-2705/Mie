@@ -38,7 +38,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
-        run: pip install --no-cache-dir -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Verify FastAPI app imports
         run: python -c "from app.main import app; print('Backend import OK')"
