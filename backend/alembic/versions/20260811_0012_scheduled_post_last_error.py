@@ -10,7 +10,6 @@ why, which needs somewhere to put the reason.
 """
 from __future__ import annotations
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "20260811_0012"
@@ -20,10 +19,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "scheduled_posts",
-        sa.Column("last_error", sa.Text(), nullable=True),
-    )
+    # `scheduled_posts` is a baseline table, so revision 20260713_0001 builds it
+    # from the current model and this column is already there on a fresh database.
+    op.execute("ALTER TABLE scheduled_posts ADD COLUMN IF NOT EXISTS last_error TEXT NULL")
 
 
 def downgrade() -> None:
