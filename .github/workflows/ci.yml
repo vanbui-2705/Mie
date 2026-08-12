@@ -35,7 +35,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: "pip"
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
         run: pip install --no-cache-dir -r requirements.txt
@@ -64,7 +64,7 @@ jobs:
         with:
           node-version: "22"
           cache: "npm"
-          cache-dependency-path: package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -77,6 +77,11 @@ jobs:
 
   compose-config:
     runs-on: ubuntu-latest
+    env:
+      # Placeholders only: `config` interpolates these but never connects anywhere.
+      FERNET_KEY: ci-placeholder-fernet-key
+      FLOWMETA_TOKEN_SECRET: ci-placeholder-token-secret
+      KASM_VNC_PASSWORD: ci-placeholder-vnc-password
     steps:
       - uses: actions/checkout@v4
 

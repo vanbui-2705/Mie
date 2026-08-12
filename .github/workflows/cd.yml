@@ -85,6 +85,11 @@ jobs:
         run: npm run build
 
       - name: Validate Docker Compose config
+        env:
+          # Placeholders only: `config` interpolates these but never connects anywhere.
+          FERNET_KEY: ci-placeholder-fernet-key
+          FLOWMETA_TOKEN_SECRET: ci-placeholder-token-secret
+          KASM_VNC_PASSWORD: ci-placeholder-vnc-password
         run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
 
       - name: Capture deploy revision
